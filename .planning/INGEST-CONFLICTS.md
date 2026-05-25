@@ -5,7 +5,7 @@
 - Blockers: 0
 - Warnings: 0
 - Informational notes: resolved into `intel/decisions.md`,
-  `docs/meta/memory.md`, and `docs/meta/rubrics.md`
+  `docs/memory.md`, and `docs/rubrics.md`
 
 ## Resolved Conflicts
 
@@ -24,6 +24,6 @@
 Prefer, in order:
 
 1. Current `.planning/intel/decisions.md`
-2. `docs/meta/memory.md` and `docs/meta/rubrics.md`
+2. `docs/memory.md` and `docs/rubrics.md`
 3. Current code/tests
 4. `docs/history.md` provenance

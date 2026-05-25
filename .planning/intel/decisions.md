@@ -230,8 +230,8 @@ Authoritative per-methodology table: every load-bearing methodology in C16 SKILL
 
 ## ADR-PROBE-7.1 — DeepSeek reasoning_effort + tools compatibility confirmed
 
-**Source**: `research/probe_reasoning_with_tools_result.md` (probe run 2026-05-25)
-**Status**: locked (resolved by empirical probe)
+**Source**: earlier DeepSeek probe, distilled into `docs/design.md`
+**Status**: locked as compatibility evidence; runtime config superseded by ADR-PROBE-7.1.1
 **Precedence**: 0 (empirically confirmed)
 
 Three configurations tested with DeepSeek `deepseek-chat` + strict tool spec:
@@ -240,12 +240,36 @@ Three configurations tested with DeepSeek `deepseek-chat` + strict tool spec:
 - `api.deepseek.com/beta` strict + `reasoning_effort=high`: reasoning_content present (55 chars), tool_call returned
 
 **Decisions unlocked**:
-- §9 Q5 resolved: COMPATIBLE; `reasoning_effort=high` runs across all turns (record/reflect/submit). §8.1 fallback ("disable reasoning on record/reflect") not needed.
-- §9 Q6 resolved: `/beta` strict mode + reasoning coexist.
+- §9 Q5 resolved: reasoning and tool calls are compatible across turns; the fallback
+  to disable reasoning on record/reflect turns is not needed.
+- §9 Q6 resolved: `/beta` strict mode and reasoning coexist.
 
 **Superseded runtime config**: earlier probe used `reasoning_effort="high"` with thinking enabled at `/beta`. Current runtime config is ADR-PROBE-7.1.1.
 
 **Cost signal**: +40% output tokens per tool call when reasoning enabled (43→60 for 1-arg probe). Realistic factor/copy turns expected 2-3× output token overhead — within accepted P4 budget.
+
+---
+
+## ADR-PROBE-7.1.1 — Current DeepSeek runtime config
+
+**Source**: `docs/design.md` (probe run 2026-05-25)
+**Status**: locked
+**Precedence**: 0 (current runtime config)
+
+DeepSeek `deepseek-v4-pro` at `/beta` supports strict tool calls with thinking
+enabled and `reasoning_effort="max"`.
+
+**Runtime config**:
+- `model = "deepseek-v4-pro"`
+- `base_url = "https://api.deepseek.com/beta"`
+- `reasoning_effort = "max"`
+- `extra_body = {"thinking": {"type": "enabled"}}`
+- `tool_choice = "auto"`
+- no `temperature`
+
+**Protocol note**: Multi-turn DeepSeek tool conversations must echo prior
+`reasoning_content` back in later requests. The current Phase 3 tool loop
+accounts for this behavior.
 
 ---
 
@@ -261,7 +285,7 @@ Master plan §9 listed 10 open questions; all decided this session:
 - **Q2** (reflect questions live in Python handler constant vs SKILL.md) — **Python handler** (`tools/skill_tools.py` string constants); SKILL.md only one-sentence pointer
 - **Q3** (engineering effort 2-3 days acceptable) — quality first, time-box is advisory
 - **Q4** (cost 3-10× acceptable) — ACCEPT
-- **Q5** (reasoning + tools compatibility) — RESOLVED by §7.1 probe: compatible, `reasoning_effort=high` always on
+- **Q5** (reasoning + tools compatibility) — RESOLVED by §7.1 probe; current runtime uses ADR-PROBE-7.1.1 (`reasoning_effort="max"`).
 - **Q6** (DeepSeek `/beta` strict mode) — ENABLE
 - **Q7** (keep c15 BridgeLogic slot for trace) — DO NOT KEEP (confirmed in master_plan, principle 8: no c14/c15 compat baggage)
 - **Q8** (reflect mandatory or optional) — OPTIONAL (confirmed in master_plan; matches Principle 12)

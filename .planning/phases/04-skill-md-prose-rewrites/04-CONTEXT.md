@@ -13,9 +13,9 @@ Outputs:
 
 ## Authority
 
-- `docs/meta/memory.md` and `docs/meta/rubrics.md` for compact durable
-  standards. Do not recreate `workspace/meta/`; the durable memory was distilled
-  into `docs/meta/`.
+- `docs/memory.md` and `docs/rubrics.md` for compact durable
+  standards. Do not recreate `workspace/meta/` or `docs/meta/`; the durable
+  memory was distilled into flat `docs/`.
 - `.planning/intel/decisions.md` for locked ADRs.
 - `docs/methodology.md` for keep/drop/defer methodology and Phase 4 writing
   rules.

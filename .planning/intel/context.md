@@ -5,8 +5,8 @@
 1. `workspace/README.md`
 2. `.planning/PROJECT.md`
 3. `.planning/STATE.md`
-4. `docs/meta/memory.md`
-5. `docs/meta/rubrics.md`
+4. `docs/memory.md`
+5. `docs/rubrics.md`
 6. `.planning/ROADMAP.md`
 7. Current phase plan under `.planning/phases/`
 

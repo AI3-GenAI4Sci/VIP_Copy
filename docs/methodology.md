@@ -1,7 +1,7 @@
 # Methodology
 
-This file replaces the old multi-file distillation bundle. It is the compact
-source for Phase 4 SKILL rewrites and future SKILL work.
+This file is the compact source for Phase 4 SKILL rewrites and future SKILL
+work. It keeps method, not old wording.
 
 ## Core Principles
 
@@ -21,6 +21,16 @@ source for Phase 4 SKILL rewrites and future SKILL work.
 | discover-personalization-factors | transferable disposition; junior-analyst test; references advisory | 5-class anchor list; STOP-GATE prose; user narration |
 | generate-copy-candidates | user-history token ban; literal anchors; drafts as thinking trace | draft quotas; emotion/price/state static lists; explanation-phrase bans |
 | personalized-copy-rubric-judge | seven binary axes; critique before verdict; floor axes by name; demographic/surveillance handling; binary-not-scale rationale | JSON output blocks; self-check blocks; old D4 axis; numeric score framing |
+
+## Candidate-Derived Method Rules
+
+- Discover relations, not renamed columns. A factor should leave a public hook
+  the copy node can use without seeing raw user state.
+- Transform factor to bridge to visible line; do not translate the factor noun
+  into merchant copy.
+- Prefer fewer strong candidates over same-angle paraphrases.
+- Judge admission with candidate linkage and critique-before-verdict; do not let
+  export mechanics become the evaluator.
 
 ## Writing Rules
 

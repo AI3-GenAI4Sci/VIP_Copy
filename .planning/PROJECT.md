@@ -42,8 +42,8 @@ new agents should keep in working memory is:
 
 ## Operating References
 
-- `docs/meta/memory.md`: durable cross-iteration memory.
-- `docs/meta/rubrics.md`: standards for judging future changes.
+- `docs/memory.md`: durable cross-iteration memory.
+- `docs/rubrics.md`: standards for judging future changes.
 - `.planning/REQUIREMENTS.md`: requirement IDs and phase traceability.
 - `.planning/intel/decisions.md`: full ADR text and precedence.
 - `docs/design.md`: implementation detail when needed.

@@ -9,7 +9,7 @@ with tests and GSD phase artifacts, then promote reviewed code into runtime.
 
 1. Read `.planning/PROJECT.md`.
 2. Read `.planning/STATE.md`.
-3. Read `docs/meta/memory.md` and `docs/meta/rubrics.md`.
+3. Read `docs/memory.md` and `docs/rubrics.md`.
 4. Continue with the next GSD phase or plan under `.planning/phases/`.
 5. Edit `seers_harness/`, `tests/`, and future workflow assets directly in this
    workspace.
@@ -20,8 +20,7 @@ with tests and GSD phase artifacts, then promote reviewed code into runtime.
 workspace/
 ├── .planning/       # GSD project, requirements, roadmap, state, phase plans
 ├── .scratch/        # local PRDs, issue drafts, and temporary planning notes
-├── docs/            # flat durable design, history, methodology, research notes
-├── docs/meta/       # compact cross-iteration memory and operating rubrics
+├── docs/            # flat durable docs, memory, rubrics, history, design
 ├── seers_harness/   # development package
 ├── tests/           # development tests
 └── pyproject.toml   # install/test configuration

@@ -15,13 +15,14 @@ Covers: `SKILL-01` / `SKILL-02` / `SKILL-03` / `SKILL-04` in
 `.planning/REQUIREMENTS.md`.
 
 This plan uses the distilled workspace sources in their current locations. Do
-not recreate `workspace/meta/`; use `workspace/docs/meta/`.
+not recreate `workspace/meta/` or `workspace/docs/meta/`; use flat
+`workspace/docs/`.
 
 ## Source Inputs
 
 - `04-CONTEXT.md`
-- `workspace/docs/meta/memory.md`
-- `workspace/docs/meta/rubrics.md`
+- `workspace/docs/memory.md`
+- `workspace/docs/rubrics.md`
 - `workspace/docs/methodology.md`
 - `.planning/intel/decisions.md`
 - `.planning/REQUIREMENTS.md`
@@ -65,7 +66,7 @@ skill methodology.
 ## Steps
 
 1. Create `workspace/workflow-skills/current/` directories for the three skills.
-2. Read every Source Input above, using `docs/meta/` paths for memory/rubrics.
+2. Read every Source Input above, using `docs/` paths for memory/rubrics.
 3. Draft each SKILL using the 8-section template and uniform front matter.
 4. Apply the Reflection Rule and keep `reflect_*` questions out of prose.
 5. Audit every prose sentence: deleting it must lose a transferable pattern.
@@ -117,5 +118,5 @@ choose a reviewed runtime update path.
 ## Skills/Methods
 
 Use `writing-skills` / `writing-a-skill` discipline for Matt-style prose,
-`docs/methodology.md` for keep/drop rules, `docs/meta/rubrics.md` for evidence,
+`docs/methodology.md` for keep/drop rules, `docs/rubrics.md` for evidence,
 and verification-before-completion style evidence before marking done.

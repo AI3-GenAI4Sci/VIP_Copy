@@ -16,10 +16,9 @@ can locate the right authority without rereading long historical documents.
 | Type | Source | Role |
 |---|---|---|
 | ADR | `docs/methodology.md` | durable principles and keep/drop/defer mapping |
-| SPEC | `docs/design.md` | implementation detail |
+| SPEC | `docs/design.md` | implementation detail and provider facts |
 | PRD | `.planning/ROADMAP.md` | implementation order and scope |
 | DOC | `docs/history.md` | old iteration trail |
-| Probe | `docs/research.md` | DeepSeek tool/thinking compatibility |
 
 ## Current Synthesis
 
@@ -28,7 +27,7 @@ can locate the right authority without rereading long historical documents.
   summaries.
 - The next live work is Phase 4 SKILL prose.
 - Historical candidate mechanics are provenance only; compact operating truth is
-  now in `docs/meta/memory.md` and `docs/meta/rubrics.md`.
+  now in `docs/memory.md` and `docs/rubrics.md`.
 
 ## Conflict Result
 

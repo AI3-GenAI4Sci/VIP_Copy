@@ -1,12 +1,30 @@
 # Docs
 
-Flat durable documentation for the workspace.
+Flat durable documentation for the workspace. This directory intentionally has
+no subdirectories: old iteration material is distilled here, not revived as
+parallel live notes.
 
-- `design.md`: current architecture and code map.
-- `history.md`: old iteration trail and regression watch.
+## Entry
+
+- `.planning/STATE.md` is the live execution pointer.
+- `memory.md`: compact cross-iteration operating truth.
+- `rubrics.md`: compact standards for judging future changes.
+
+## Use When Needed
+
+- `design.md`: current architecture, code map, data contract, and provider facts.
 - `methodology.md`: SKILL-writing and agent-method distillation.
-- `research.md`: retained external/provider research conclusions.
+- `history.md`: candidate evolution lineage, provenance, and regression watch.
+
+## Read Order For Fresh Agents
+
+1. `workspace/README.md`
+2. `.planning/PROJECT.md`
+3. `.planning/STATE.md`
+4. `docs/memory.md`
+5. `docs/rubrics.md`
+6. `.planning/ROADMAP.md`
+7. Current phase plan under `.planning/phases/`
 
 Use `.planning/` for execution state and phase plans. Use
-`docs/meta/memory.md` and `docs/meta/rubrics.md` for the shortest operating
-context.
+`harness-runtime/AGENTS.md` only for reviewed release promotion.
