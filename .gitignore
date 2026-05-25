@@ -1,0 +1,16 @@
+.env
+.env.local
+.env.*.local
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+
+# Local raw data and generated run output stay outside Git.
+data_100k.csv
+.runs/
+.cache/
+*.jsonl

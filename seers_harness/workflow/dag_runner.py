@@ -1,0 +1,122 @@
+"""C17 WorkflowRuntime — invokes the tool-use loop per node attempt (LOOP-05).
+
+Per master_plan §4.4 and RESEARCH §4 KEEP/DELETE/REWRITE table, ``_run_node``
+collapses to one ``run_skill_via_tools(...)`` call followed by
+``model_type.model_validate(result.artifact)``. The c16 polling/closure/
+re-injection machinery is gone — five anti-patterns were dropped per the
+research table, and the legacy multi-round trace event was renamed to
+``tool_loop_summary`` with fields {turns_used, tool_calls_made,
+last_reasoning_content}. See RESEARCH §4 + §8 for the table and pitfalls.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, ValidationError
+
+from seers_harness.agentic.tool_loop import ToolLoopError, run_skill_via_tools
+from seers_harness.core.errors import (
+    SchemaValidationHarnessError,
+    classify_exception,
+)
+from seers_harness.tools.skill_tools import TOOL_HANDLERS, TOOLS_SPEC
+from seers_harness.workflow.payloads import provider_payload_for_node
+
+
+@dataclass
+class NodeSpec:
+    """Minimum-viable per-node contract for c17.
+
+    The c16 NodeSpec carries provider/temperature/skill_registry routing; for
+    Phase 3 integration the runtime takes a single provider in its ctor and
+    each NodeSpec only needs (id, skill_name, output_model, max_attempts).
+    """
+    id: str
+    skill_name: str
+    output_model: type[BaseModel]
+    max_attempts: int = 1
+
+
+@dataclass
+class WorkflowRuntime:
+    """In-process DAG runner — drives one tool-loop call per node attempt.
+
+    ``trace`` collects ordered events (provider_call, tool_loop_summary,
+    node_retry_decision). ``records`` collects NodeRunRecord-shaped dicts
+    (RUNNING / SUCCEEDED / FAILED) with status + error_category for the
+    outer-retry shell test (Plan 03-03 Test B).
+    """
+    provider: Any
+    output_dir: Path
+    trace: list[dict[str, Any]] = field(default_factory=list)
+    records: list[dict[str, Any]] = field(default_factory=list)
+
+    def _run_node(self, *, node: NodeSpec, scenario: Any) -> Path:
+        last_error: Exception | None = None
+        for attempt in range(1, node.max_attempts + 1):
+            session_id = f"{node.id}:attempt-{attempt}:{uuid.uuid4().hex[:8]}"
+            self.records.append(
+                {"node_id": node.id, "attempt": attempt, "session_id": session_id, "status": "RUNNING"}
+            )
+            self.trace.append(
+                {"type": "provider_call", "node_id": node.id, "session_id": session_id, "attempt": attempt}
+            )
+            try:
+                base_payload = provider_payload_for_node(
+                    node_id=node.id, scenario=scenario,
+                    dependency_payloads={}, session_id=session_id,
+                )
+                result = run_skill_via_tools(
+                    skill_name=node.skill_name,
+                    skill_bundle="SKILL_BODY",
+                    payload=base_payload.get("scenario") or base_payload,
+                    tools_spec=TOOLS_SPEC[node.skill_name],
+                    tool_handlers=TOOL_HANDLERS,
+                    provider=self.provider,
+                    node_id=node.id,
+                )
+                self.trace.append(
+                    {
+                        "type": "tool_loop_summary", "node_id": node.id, "session_id": session_id,
+                        "turns_used": result.turns_used,
+                        "tool_calls_made": result.tool_calls_made,
+                        "last_reasoning_content": result.last_reasoning_content,
+                    }
+                )
+                try:
+                    parsed = node.output_model.model_validate(result.artifact)
+                except ValidationError as exc:
+                    raise SchemaValidationHarnessError(str(exc)) from exc
+                output_path = self._write_artifact(node, session_id, parsed)
+                self.records.append(
+                    {"node_id": node.id, "attempt": attempt, "session_id": session_id,
+                     "status": "SUCCEEDED", "output_path": str(output_path)}
+                )
+                return output_path
+            except Exception as exc:
+                last_error = exc
+                info = classify_exception(exc)
+                self.records.append(
+                    {"node_id": node.id, "attempt": attempt, "session_id": session_id,
+                     "status": "FAILED", "error": repr(exc),
+                     "error_category": str(info["category"]), "retryable": bool(info["retryable"])}
+                )
+                self.trace.append(
+                    {"type": "node_retry_decision", "node_id": node.id, "attempt": attempt,
+                     "error_category": info["category"], "retryable": info["retryable"],
+                     "remaining_attempts": node.max_attempts - attempt}
+                )
+                if not info["retryable"]:
+                    break
+        raise RuntimeError(f"Node {node.id} failed after {node.max_attempts} attempts") from last_error
+
+    def _write_artifact(self, node: NodeSpec, session_id: str, parsed: BaseModel) -> Path:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        path = self.output_dir / f"{node.id}-{session_id}.json"
+        path.write_text(parsed.model_dump_json(indent=2), encoding="utf-8")
+        return path

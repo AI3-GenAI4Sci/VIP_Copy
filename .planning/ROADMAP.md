@@ -1,0 +1,65 @@
+# Roadmap: SEERS Harness Workspace
+
+## Overview
+
+The workspace follows a seven-phase GSD plan. Phases 1-3 have landed and are
+covered by phase summaries plus tests. Phase 4 is next.
+
+| Phase | Scope | Status | Evidence |
+|---|---|---|---|
+| 1 | Schema + tool-handler foundation | Complete | covered by current 122/122 suite; summaries `01-01`, `01-02` |
+| 2 | Single `generate_with_tools` provider path | Complete | covered by current 122/122 suite; summaries `02-01`, `02-02` |
+| 3 | Tool loop + DAG integration + payload cleanup | Complete | covered by current 122/122 suite; summaries `03-01`, `03-02`, `03-03` |
+| 4 | Rewrite the three development SKILL.md files | Ready | Plan exists at `04-skill-md-prose-rewrites/04-PLAN.md` |
+| 5 | Cleanup, deletes, tests, bypass-module regression | Pending | Plan TBD |
+| 6 | Evolution chain + production hardening | Pending | Plan TBD |
+| 7 | Real-LLM validation at batch 20 | Pending | Plan TBD |
+
+## Phase Criteria
+
+### Phase 1: Schema + Tools Foundation
+
+Accepted when the C17 schema accepts the new fields, rejects deleted/self-rated
+fields, exposes all pure-function handlers, and keeps handler logic structural.
+
+### Phase 2: Single Provider Path
+
+Accepted when `openai_compatible.py` exposes one tool path, deletes
+`generate_json`/`response_format`, carries parsed raw tool calls, and keeps the
+provider file within its line budget.
+
+### Phase 3: Tool Loop + DAG Integration
+
+Accepted when `run_skill_via_tools` drives scripted tool calls, handles error and
+retry routing, and `dag_runner._run_node` validates final artifacts through typed
+models without polling residue.
+
+### Phase 4: SKILL.md Prose Rewrites
+
+Accepted when the three SKILL files are ≤60 visible markdown lines each, use the
+8-section skill template, frame work as tool-call sequences, retain only
+transferable methodology, and avoid numeric thresholds, internal examples,
+enumerations, and JSON-output framing.
+
+### Phase 5: Cleanup, Deletes, Tests, Regression
+
+Accepted when retired polling/check modules are gone, invariants match the new
+schema, FakeProvider uses tool-call scripts, and storage/assets/evaluation/gates
+/CLI regression surfaces either pass or have documented delete/keep decisions.
+
+### Phase 6: Evolution Chain + Production Hardening
+
+Accepted when evolution skills align with tool-use principles, reflow cadence is
+scenario-based, reference v2 is designed but not emitted, concurrency/progress UX
+are tested, and promotion-chain modules build against the current schema.
+
+### Phase 7: Real-LLM Validation
+
+Accepted when 20 real DeepSeek scenarios run through the stack with tool calls,
+clean copy, transferable factors, reachable reflection, and expected evolution
+reflow events.
+
+## Execution Rule
+
+Proceed in numeric order. Phase 4 may be completed before broader cleanup. Phase
+6 depends on Phase 5; Phase 7 depends on Phase 6.
