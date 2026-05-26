@@ -13,6 +13,17 @@ exports append below as later plans land.
 
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
 
+# Plan 07-02 additions — evidence-capture proxy provider (D-08).
+from seers_harness.validation.recording_provider import (
+    RecordingProvider,
+    get_current_node_id,
+    set_current_node_id,
+)
+
 __all__ = [
     "write_evolution_snapshot",
+    # 07-02 additions
+    "RecordingProvider",
+    "set_current_node_id",
+    "get_current_node_id",
 ]
