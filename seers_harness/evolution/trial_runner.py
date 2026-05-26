@@ -162,6 +162,7 @@ def run_request_trial(
     patch: SkillDeltaPatch | None = None,
     request_id: str = "",
     scenario_id: str = "",
+    events: list[dict] | None = None,
 ) -> TrialOutcome:
     """Run one request inside a temporary skill surface.
 
@@ -173,13 +174,41 @@ def run_request_trial(
     The runtime's ``output_dir`` is honored as-is: artifacts land where
     the caller asked, not under ``workspace_dir / "skills"``. The skill
     root copy is for skill-text isolation only.
+
+    Phase 7 plan 07-01 adds an optional ``events: list[dict] | None``
+    observability seam (D-11, D-22(c)). When ``events`` is ``None``, the
+    runner is byte-identical to its Phase 6 behaviour — no event records
+    are produced, no extra branching is observable from the outside. When
+    a list is supplied, the runner appends:
+
+    * one ``trial_started`` event before invoking the runtime,
+    * one ``trial_succeeded`` event on the success path, OR
+    * one ``trial_failed`` event on the exception path (per D-19, this
+      includes ``exception_class`` so the downstream classifier can route
+      schema/protocol failures fail-fast vs transient failures recorded
+      against the delta's belief).
+
+    Per D-20, this hook does NOT modify trial trigger cadence or selection
+    logic — Phase 6's portfolio-adaptive trigger stays untouched. Zero
+    observed trials in 20 requests is a legitimate VAL-06 outcome.
     """
-    trial_delta_id = None  # set below if a patch is applied
+    trial_delta_id_for_event = (
+        _delta_id_from_patch_or_none(patch) if patch is not None else None
+    )
     outcome = TrialOutcome(
         request_id=request_id,
         scenario_id=scenario_id,
-        trial_delta_id=trial_delta_id,
+        trial_delta_id=None,
     )
+
+    if events is not None:
+        events.append(
+            {
+                "type": "trial_started",
+                "trial_id": request_id,
+                "delta_id": trial_delta_id_for_event,
+            }
+        )
 
     with apply_delta_patch_temporarily(live_skill_root, workspace_dir, patch) as _temp_root:
         # The temp_root copy is held open so a future skill-loader hook can
@@ -197,9 +226,28 @@ def run_request_trial(
         except Exception as exc:
             outcome.success = False
             outcome.failure_category = type(exc).__name__
+            if events is not None:
+                events.append(
+                    {
+                        "type": "trial_failed",
+                        "trial_id": request_id,
+                        "delta_id": trial_delta_id_for_event,
+                        "exception_class": type(exc).__name__,
+                        "exception_message": str(exc),
+                    }
+                )
 
     if patch is not None:
-        outcome.trial_delta_id = _delta_id_from_patch_or_none(patch)
+        outcome.trial_delta_id = trial_delta_id_for_event
+
+    if events is not None and outcome.success:
+        events.append(
+            {
+                "type": "trial_succeeded",
+                "trial_id": request_id,
+                "delta_id": trial_delta_id_for_event,
+            }
+        )
     return outcome
 
 
