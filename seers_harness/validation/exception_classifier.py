@@ -32,10 +32,19 @@ Routing summary (consumer side, 07-04 stage runner):
     "provider_error"  ┃ fail-fast (stage stops, exit non-zero)
     "infra_error"     ┃ fail-fast (stage stops, exit non-zero)
 
-The classifier is intentionally narrow: it inspects exception class
-only, never the message string, never the cause chain, never the call
-site. Type-based classification matches the explicit allow-list rule
-the 07-04 plan task 1 calls out.
+The classifier inspects exception class only — never the message
+string, never the call site. Type-based classification matches the
+explicit allow-list rule the 07-04 plan task 1 calls out. The
+classifier DOES walk the ``__cause__`` / ``__context__`` chain so
+provider exceptions that upstream wrappers re-raise as a generic
+``RuntimeError`` (e.g. ``dag_runner._run_node``'s
+``RuntimeError("Node X failed after 1 attempts")`` wrapper) still
+route to ``provider_error`` rather than the ``infra_error`` default.
+Without the walk, every wrapped provider failure lands in the
+default bucket and audit logs diverge from the true upstream cause
+(observed live in 07-06 retry: real ``ProviderAuthError`` and
+``ProviderResponseError`` both surfaced as ``RuntimeError`` and were
+labelled ``infra_error``).
 """
 
 from __future__ import annotations
@@ -97,13 +106,21 @@ def classify(
     """Route ``exc`` into one of three D-19 labels.
 
     See the module docstring for full label semantics. The function
-    short-circuits on the first ``isinstance`` match. The default
-    fallback is ``"infra_error"`` — there is no silent-absorb branch.
+    walks the ``__cause__`` / ``__context__`` chain so wrapped
+    provider exceptions (e.g. ``dag_runner._run_node`` re-raising as
+    ``RuntimeError``) still route correctly. Short-circuits on the
+    first ``isinstance`` match. The default fallback is
+    ``"infra_error"`` — there is no silent-absorb branch.
     """
-    if isinstance(exc, TrialFailure):
-        return "trial_failure"
-    if isinstance(exc, _PROVIDER_EXCEPTION_TYPES):
-        return "provider_error"
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, TrialFailure):
+            return "trial_failure"
+        if isinstance(cur, _PROVIDER_EXCEPTION_TYPES):
+            return "provider_error"
+        cur = cur.__cause__ or cur.__context__
     return "infra_error"
 
 
