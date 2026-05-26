@@ -1,4 +1,4 @@
-"""Workflow-node payload contracts for the c17 tool-use loop (LOOP-06).
+"""Workflow-node payload contracts for the tool-use loop (LOOP-06).
 
 Each node sees a strictly bounded view of the Scenario:
   - factor_discovery sees user_state.behavior + products + derived features.
@@ -9,8 +9,10 @@ Each node sees a strictly bounded view of the Scenario:
     quota to the model — see master_plan §4.5).
   - personalized_copy_rubric sees rubric-shaped candidates + product facts.
 
-The c16 legacy fan-out quota fields are deliberately ABSENT from this module
-(see tests/test_payloads_loop06_audit.py for the literal token guard).
+Per master_plan §4.5, ``candidate_generation_policy`` is locked to exactly
+two keys (``unit`` and ``score_all_candidates_together_after_hard_rules``);
+any other quota-shaped field declared in this module is structurally
+rejected by ``tests/test_payloads_loop06_audit.py``.
 
 The candidate_generation_policy dict at module level is the load-bearing
 contract: master_plan §4.5 fixes its two keys exactly.
@@ -114,26 +116,16 @@ def rubric_payload_for(
     *,
     scenario: Any,
     copy_artifact: dict[str, Any] | None = None,
-    hard_check_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Request-level rubric input — candidates + product facts after hard checks.
+    """Request-level rubric input — candidates + product facts.
 
-    Filters out candidates whose hard_check entry is failing or has any
-    blocking_rule_ids. Indexes hard-check rows by candidate_index.
+    Each ``copy_artifact`` candidate becomes one rubric input row keyed by
+    candidate_index.
     """
     s = _scenario_dict(scenario)
     copy = copy_artifact or {}
-    hard = hard_check_artifact or {}
-    hard_by_index = {
-        int(row["candidate_index"]): row
-        for row in (hard.get("candidate_results") or [])
-        if row.get("candidate_index") is not None
-    }
     candidates: list[dict[str, Any]] = []
     for idx, candidate in enumerate(copy.get("candidates") or []):
-        row = hard_by_index.get(idx) or {}
-        if row and (not row.get("passed", True) or row.get("blocking_rule_ids")):
-            continue
         candidates.append(
             {
                 "candidate_id": candidate.get("candidate_id") or f"candidate-{idx}",
@@ -180,7 +172,6 @@ def provider_payload_for_node(
         view = rubric_payload_for(
             scenario=scenario,
             copy_artifact=deps.get("copy_generation") or {},
-            hard_check_artifact=deps.get("hard_check") or {},
         )
     else:
         view = _scenario_dict(scenario)

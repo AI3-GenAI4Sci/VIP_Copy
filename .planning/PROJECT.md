@@ -17,9 +17,10 @@ artifact contract.
 ## Current State
 
 - Completed: Phase 1 Schema + Tools, Phase 2 Single Provider Path, Phase 3 Tool
-  Loop + DAG Integration.
-- Current focus: Phase 4 SKILL.md prose rewrites.
-- Verification baseline: 122 workspace tests pass.
+  Loop + DAG Integration, Phase 4 SKILL.md Prose Rewrites, Phase 5 Tool-Use
+  Migration Closeout, Phase 6 Evolution Chain + Production Hardening.
+- Current focus: Phase 7 Real-LLM Validation.
+- Verification baseline: 251 workspace tests pass (1 skipped).
 
 See `.planning/STATE.md` for live progress and `.planning/ROADMAP.md` for phase
 scope.

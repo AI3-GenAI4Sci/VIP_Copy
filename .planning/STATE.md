@@ -1,25 +1,33 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-status: executing
-last_updated: "2026-05-25T22:40:00.000Z"
-last_activity: "Workspace flattened; GSD docs compacted; Phase 1-3 complete; ready for Phase 4."
+milestone_name: milestone
+status: ready_to_plan
+last_updated: 2026-05-26T05:58:36.897Z
 progress:
   total_phases: 7
-  completed_phases: 3
-  total_completed_plans: 7
-  percent: 43
+  completed_phases: 6
+  total_plans: 5
+  completed_plans: 14
+  percent: 86
+stopped_at: Phase 06 complete (5/5) — ready to discuss Phase 7
 ---
 
 # Project State
 
 ## Current Position
 
-- Phase: 4 of 7
-- Focus: SKILL.md Prose Rewrites
-- Status: ready to execute `04-skill-md-prose-rewrites/04-PLAN.md`
+Phase: 7
+Plan: Not started
+
+- Phase: 6 of 7
+- Focus: Evolution Chain + Production Hardening
+- Status: 06-01 and 06-02 complete; wave 3 (06-03) next.
+
 - Verified baseline: `uv run --python 3.12 --extra dev python -m pytest -q`
-  passes 122 tests.
+  passes 213 tests after 06-02.
+
+- Phase 5 smoke: 20 × 3 forbid-schema artifacts.
 
 ## Completed Work
 
@@ -28,13 +36,17 @@ progress:
 | 1. Schema + Tools Foundation | 2 | `01-01-SUMMARY.md`, `01-02-SUMMARY.md` |
 | 2. Single Provider Path | 2 | `02-01-SUMMARY.md`, `02-02-SUMMARY.md` |
 | 3. Tool Loop + DAG Integration | 3 | `03-01-SUMMARY.md`, `03-02-SUMMARY.md`, `03-03-SUMMARY.md` |
+| 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
+| 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
+| 6. Evolution Chain + Production Hardening | 2 (of 5) | `06-01-SUMMARY.md`, `06-02-SUMMARY.md` |
 
 ## Active Watchlist
 
-- Phase 4 must preserve methodology without copying old prose wholesale.
-- Phase 5 must decide whether any remaining hard-check/gate behavior survives or
-  is fully absorbed by tool handlers and rubric judgment.
 - Phase 6 must verify current DeepSeek rate limits before concurrency work.
+- Phase 6 owns the `harness-runtime/workflow-skills/` reconciliation against
+  `workspace/workflow-skills/current/` (runtime lacks
+  `personalized-copy-rubric-judge/SKILL.md`).
+
 - `harness-runtime/` remains untouched until reviewed release promotion.
 
 ## Deferred
@@ -45,6 +57,6 @@ progress:
 
 ## Resume Instruction
 
-Next command should be a GSD execution of Phase 4 from:
+Next command should execute Phase 6 from:
 
-`workspace/.planning/phases/04-skill-md-prose-rewrites/04-PLAN.md`
+`workspace/.planning/phases/06-evolution-chain-production-hardening/`

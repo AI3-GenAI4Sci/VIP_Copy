@@ -1,10 +1,9 @@
-"""C17 WorkflowRuntime — invokes the tool-use loop per node attempt (LOOP-05).
+"""WorkflowRuntime — invokes the tool-use loop per node attempt (LOOP-05).
 
 Per master_plan §4.4 and RESEARCH §4 KEEP/DELETE/REWRITE table, ``_run_node``
 collapses to one ``run_skill_via_tools(...)`` call followed by
-``model_type.model_validate(result.artifact)``. The c16 polling/closure/
-re-injection machinery is gone — five anti-patterns were dropped per the
-research table, and the legacy multi-round trace event was renamed to
+``model_type.model_validate(result.artifact)``. Each node attempt is a single
+tool-loop invocation plus pydantic validation; the trace event is
 ``tool_loop_summary`` with fields {turns_used, tool_calls_made,
 last_reasoning_content}. See RESEARCH §4 + §8 for the table and pitfalls.
 """
@@ -30,11 +29,13 @@ from seers_harness.workflow.payloads import provider_payload_for_node
 
 @dataclass
 class NodeSpec:
-    """Minimum-viable per-node contract for c17.
+    """Minimum-viable per-node contract.
 
-    The c16 NodeSpec carries provider/temperature/skill_registry routing; for
-    Phase 3 integration the runtime takes a single provider in its ctor and
-    each NodeSpec only needs (id, skill_name, output_model, max_attempts).
+    Each NodeSpec declares four fields: ``id`` (node identifier in the DAG
+    trace), ``skill_name`` (which skill the tool loop runs), ``output_model``
+    (the pydantic model that validates the artifact), and ``max_attempts``
+    (retry budget). The runtime takes a single provider in its ctor, so
+    NodeSpec carries no provider/temperature/skill_registry routing.
     """
     id: str
     skill_name: str
@@ -56,7 +57,14 @@ class WorkflowRuntime:
     trace: list[dict[str, Any]] = field(default_factory=list)
     records: list[dict[str, Any]] = field(default_factory=list)
 
-    def _run_node(self, *, node: NodeSpec, scenario: Any) -> Path:
+    def _run_node(
+        self,
+        *,
+        node: NodeSpec,
+        scenario: Any,
+        dependency_payloads: dict[str, dict[str, Any]] | None = None,
+    ) -> Path:
+        deps = dependency_payloads or {}
         last_error: Exception | None = None
         for attempt in range(1, node.max_attempts + 1):
             session_id = f"{node.id}:attempt-{attempt}:{uuid.uuid4().hex[:8]}"
@@ -69,7 +77,7 @@ class WorkflowRuntime:
             try:
                 base_payload = provider_payload_for_node(
                     node_id=node.id, scenario=scenario,
-                    dependency_payloads={}, session_id=session_id,
+                    dependency_payloads=deps, session_id=session_id,
                 )
                 result = run_skill_via_tools(
                     skill_name=node.skill_name,
@@ -120,3 +128,33 @@ class WorkflowRuntime:
         path = self.output_dir / f"{node.id}-{session_id}.json"
         path.write_text(parsed.model_dump_json(indent=2), encoding="utf-8")
         return path
+
+    def run_request(
+        self,
+        *,
+        scenario: Any,
+        nodes: list[NodeSpec],
+    ) -> dict[str, Path]:
+        """Drive a multi-node DAG sequentially.
+
+        Calls ``_run_node`` per ``nodes`` entry in list order. After each node
+        succeeds, reads the written artifact JSON back from disk and
+        accumulates it into a ``dependency_payloads`` dict keyed by
+        ``node.id`` so the next node's ``provider_payload_for_node`` can
+        resolve upstream artifacts.
+
+        Returns: dict mapping ``node.id`` -> output_path.
+        """
+        dependency_payloads: dict[str, dict[str, Any]] = {}
+        output_paths: dict[str, Path] = {}
+        for node in nodes:
+            output_path = self._run_node(
+                node=node,
+                scenario=scenario,
+                dependency_payloads=dependency_payloads,
+            )
+            dependency_payloads[node.id] = json.loads(
+                output_path.read_text(encoding="utf-8")
+            )
+            output_paths[node.id] = output_path
+        return output_paths

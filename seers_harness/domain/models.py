@@ -1,10 +1,9 @@
-"""C17 domain schema — pydantic v2 contracts for factors, candidates, rubric judgments.
+"""Domain schema — pydantic v2 contracts for factors, candidates, rubric judgments.
 
-Every BaseModel sets ``model_config = {"extra": "ignore"}`` so legacy c14/c15
-JSON on disk decodes silently. Field declaration order is load-bearing for
-critique-before-verdict tools (RESEARCH Open Q2 RESOLVED — pydantic
-``model_json_schema()`` preserves declaration order in ``properties`` dict;
-DeepSeek tool spec emits arguments in that order).
+Field declaration order is load-bearing for critique-before-verdict tools
+(RESEARCH Open Q2 RESOLVED — pydantic ``model_json_schema()`` preserves
+declaration order in ``properties`` dict; DeepSeek tool spec emits arguments
+in that order).
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class EvidenceRef(BaseModel):
     path: str
     value: str | int | float | bool | None = None
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 FactorDirection = Literal["user_to_need", "item_to_need", "cross"]
@@ -32,7 +31,7 @@ class PersonalizationFactor(BaseModel):
     bridge: str | None = None
     covers_product_ids: list[str] = Field(default_factory=list)
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
     @field_validator("evidence_refs", mode="before")
     @classmethod
@@ -51,7 +50,7 @@ class PersonalizationFactor(BaseModel):
 class BridgeLogic(BaseModel):
     product_anchor: str = ""
     relation_anchor: str = ""
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 class CopyCandidate(BaseModel):
@@ -67,7 +66,7 @@ class CopyCandidate(BaseModel):
     used_copyable_hooks: list[str] = Field(default_factory=list)
     intended_effect: str = ""
 
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _hydrate(self):
@@ -88,7 +87,7 @@ class PerAxisVerdict(BaseModel):
         "ok", "empty", "anchor_echo", "source_path_missing", "quote_too_short"
     ] = "ok"
     verdict: Literal["pass", "fail"] = "pass"
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 RubricDecision = Literal["admit", "hold", "reject"]
@@ -106,19 +105,19 @@ class PersonalizedCopyRubricJudgment(BaseModel):
     primary_risk: str = ""
     rationale: str = ""
     decision: RubricDecision = "hold"
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 class FactorDiscoveryArtifact(BaseModel):
     factors: list[PersonalizationFactor] = Field(default_factory=list)
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 class CopyGenerationArtifact(BaseModel):
     candidates: list[CopyCandidate] = Field(default_factory=list)
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}
 
 
 class PersonalizedCopyRubricArtifact(BaseModel):
     judgments: list[PersonalizedCopyRubricJudgment] = Field(default_factory=list)
-    model_config = {"extra": "ignore"}
+    model_config = {"extra": "forbid"}

@@ -34,9 +34,9 @@ from seers_harness.domain.models import (
 )
 
 
-# --------------------------------------------------------------------------- #
-# Verbatim helpers from c16 check_tools.py                                    #
-# --------------------------------------------------------------------------- #
+# Pure-function helpers for evidence-path resolution, Chinese-digit detection,
+# and ad-copy character counting — used by record_factor / record_candidate /
+# judge_candidate below.
 
 
 _ARABIC_DIGIT = re.compile(r"\d")

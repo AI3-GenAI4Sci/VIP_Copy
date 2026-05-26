@@ -99,3 +99,21 @@ counts. The minimum diagnostic row is:
 - candidate count;
 - rubric admit / hold / reject counts;
 - exported asset count.
+
+## Long-Run Progress (Phase 7 Hook Point)
+
+`seers_harness.workflow.progress.ProgressReporter` is the Phase-6 surface
+for long-run terminal progress. It writes one plain newline-terminated line
+per update with `completed/total`, `current` request id, `failures`, and
+`delta_trials`. Disabled mode and CI mode (env `CI=true`) are supported.
+
+**Phase-7 hook point:** the request-fan-out loop that drives many
+`WorkflowRuntime.run_request` calls — for example, a batch script that
+sweeps a real-DeepSeek scenario set. The Phase-6 fake-provider smoke
+(`tests/smoke/test_e2e_smoke.py`) deliberately keeps its existing
+`smoke i/N: <request_id>` print line unchanged, because that assertion shape
+is the Phase-5 reference and refactoring it inside Phase-6 would weaken the
+existing 20-request smoke.
+
+See `docs/deepseek_rate_limit_facts.md` for the complementary fact
+recording and the Phase-6 non-goal on concurrency tuning / limiters.

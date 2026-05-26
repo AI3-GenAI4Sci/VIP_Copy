@@ -1,10 +1,11 @@
-"""Provider interfaces shared by runtime adapters in C17.
+"""Provider interfaces shared by runtime adapters.
 
 Phase 2 declares one entry point — :py:meth:`Provider.generate_with_tools` —
 which returns a :class:`ProviderResult` carrying either tool-call output or a
-stop verdict. PROV-01 deletes the c16 parallel JSON method at the Protocol
-level (its literal absence here is the contract). PROV-05 makes ``tool_calls``
-the primary output channel; ``payload`` is retained as an empty back-compat slot.
+stop verdict. PROV-01: only ``generate_with_tools`` is exposed; no JSON
+fallback method exists on this Protocol (its literal absence here is the
+contract). PROV-05 makes ``tool_calls`` the primary output channel;
+``payload`` is retained as an empty back-compat slot.
 
 Per ADR-PROBE-7.1, reasoning + tools coexist at DeepSeek ``/beta``. Runtime
 params (``reasoning_effort="max"``, ``extra_body={"thinking":{"type":"enabled"}}``,
@@ -49,17 +50,15 @@ class Provider(Protocol):
         ...
 
 
-# Field order rationale (PROV-05 + Plan 02-01 spec):
-#   `payload` first to keep the c16 ProviderResult signature stable for tests
-#   that positional-construct `ProviderResult(payload=...)`. `tool_calls` third
-#   (after `usage`) so the most-frequently-touched new field is near the top;
-#   remaining fields keep the c16 ordering verbatim.
+# Field order: ``payload`` first so Phase 2 tests can positional-construct
+# ``ProviderResult(payload=...)``; ``tool_calls`` follows ``usage`` to keep the
+# primary output channel near the top.
 @dataclass
 class ProviderResult:
     """One LLM turn's structured output.
 
     PROV-05: ``tool_calls`` is the primary output channel; ``payload`` is the
-    back-compat slot (kept empty in c17 — Phase 3 reads ``tool_calls``).
+    back-compat slot (kept empty — Phase 3 reads ``tool_calls``).
     """
 
     payload: dict[str, Any] = field(default_factory=dict)

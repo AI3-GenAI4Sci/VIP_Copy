@@ -2,17 +2,17 @@
 
 ## Overview
 
-The workspace follows a seven-phase GSD plan. Phases 1-3 have landed and are
-covered by phase summaries plus tests. Phase 4 is next.
+The workspace follows a seven-phase GSD plan. Phases 1-5 have landed and are
+covered by phase summaries plus tests. Phase 6 is next.
 
 | Phase | Scope | Status | Evidence |
 |---|---|---|---|
 | 1 | Schema + tool-handler foundation | Complete | covered by current 122/122 suite; summaries `01-01`, `01-02` |
 | 2 | Single `generate_with_tools` provider path | Complete | covered by current 122/122 suite; summaries `02-01`, `02-02` |
 | 3 | Tool loop + DAG integration + payload cleanup | Complete | covered by current 122/122 suite; summaries `03-01`, `03-02`, `03-03` |
-| 4 | Rewrite the three development SKILL.md files | Ready | Plan exists at `04-skill-md-prose-rewrites/04-PLAN.md` |
-| 5 | Cleanup, deletes, tests, bypass-module regression | Pending | Plan TBD |
-| 6 | Evolution chain + production hardening | Pending | Plan TBD |
+| 4 | Rewrite the three development SKILL.md files | Complete | summary `04-SUMMARY.md`; three SKILLs under `workspace/workflow-skills/current/`; 122/122 baseline holds |
+| 5 | Cleanup, deletes, tests, bypass-module regression | Complete | summary `05-SUMMARY.md`; 125/125 suite incl. 20-request E2E smoke |
+| 6 | 5/5 | Complete    | 2026-05-26 |
 | 7 | Real-LLM validation at batch 20 | Pending | Plan TBD |
 
 ## Phase Criteria

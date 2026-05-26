@@ -88,17 +88,17 @@ phase summaries and tests.
 
 | ID | Requirement | Status |
 |---|---|---|
-| EVO-01 | Delete evolution skills that ask an LLM to judge champion bundles or select probes. | Pending |
-| EVO-02 | Rewrite `distill-skill-deltas` as a tool-use skill with matching handlers. | Pending |
-| EVO-03 | Audit `promote-skill-patch` and keep only deterministic action. | Pending |
-| EVO-04 | Rename and implement scenario-based evolution cadence. | Pending |
-| EVO-05 | Write reference v2 schema design only; do not emit v2 yet. | Pending |
-| EVO-06 | Audit evolution field names against current schema. | Pending |
-| PROD-01 | Stress concurrency 20 with realistic FakeProvider latency. | Pending |
-| PROD-02 | Verify current DeepSeek rate-limit assumptions before tuning limits. | Pending |
-| TERM-01 | Add terminal progress display for long runs. | Pending |
-| TERM-02 | Add CI-safe `--no-progress`/plain-output behavior. | Pending |
-| PROMOTE-01 | Smoke promotion-chain public entry points against current fixtures. | Pending |
+| EVO-01 | Delete evolution skills that ask an LLM to judge champion bundles or select probes. | Complete (06-01-SUMMARY.md) |
+| EVO-02 | Rewrite `distill-skill-deltas` as a tool-use skill with matching handlers. | Complete (06-01-SUMMARY.md) |
+| EVO-03 | Audit `promote-skill-patch` and keep only deterministic action. | Complete (06-05-SUMMARY.md) |
+| EVO-04 | Rename and implement scenario-based evolution cadence. | Complete (06-02-SUMMARY.md) |
+| EVO-05 | Write reference v2 schema design only; do not emit v2 yet. | Complete (06-01-SUMMARY.md) |
+| EVO-06 | Audit evolution field names against current schema. | Complete (06-01-SUMMARY.md) |
+| PROD-01 | Stress concurrency 20 with realistic FakeProvider latency. | Complete (06-03-SUMMARY.md) |
+| PROD-02 | Verify current DeepSeek rate-limit assumptions before tuning limits. | Complete (06-04-SUMMARY.md) |
+| TERM-01 | Add terminal progress display for long runs. | Complete (06-04-SUMMARY.md) |
+| TERM-02 | Add CI-safe `--no-progress`/plain-output behavior. | Complete (06-04-SUMMARY.md) |
+| PROMOTE-01 | Smoke promotion-chain public entry points against current fixtures. | Complete (06-05-SUMMARY.md) |
 
 ## Phase 7: Real-LLM Validation
 

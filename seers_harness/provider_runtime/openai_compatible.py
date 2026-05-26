@@ -2,12 +2,8 @@
 
 Runtime params are locked per ADR-PROBE-7.1.1: ``reasoning_effort="max"`` +
 ``thinking={"type":"enabled"}`` + ``tool_choice="auto"`` at DeepSeek ``/beta``
-on every call (PROV-03). Phase 7 wires this against the real DeepSeek endpoint;
-Phase 2 tests inject a fake client by monkeypatching the local ``OpenAI`` symbol
-before construction (no openai SDK network call, no API key).
-
-Default model is ``deepseek-v4-pro`` — DeepSeek's current main high-tier model.
-``deepseek-chat`` is a compatibility alias deprecated 2026-07-24 per official docs.
+on every call (PROV-03). Default model ``deepseek-v4-pro`` (current high-tier);
+``deepseek-chat`` is a deprecated compatibility alias.
 """
 
 from __future__ import annotations
@@ -61,9 +57,8 @@ class OpenAICompatibleProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ProviderResult:
-        # node_id is currently used only for ProviderResponseError message traceability.
-        # skill_bundle is accepted per Plan 01 contract and reserved for future logging hooks.
-        # PROV-03: every call uses these locked params — no per-node / per-turn branching.
+        # node_id is for ProviderResponseError message traceability; skill_bundle
+        # is reserved per Plan 01 contract. PROV-03: locked params on every call.
         params: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -87,9 +82,6 @@ class OpenAICompatibleProvider:
         self.last_usage = extract_usage(response)
         choice = response.choices[0]
         message = choice.message
-        finish_reason = getattr(choice, "finish_reason", None)
-        model_name = getattr(response, "model", None)
-        reasoning_content = getattr(message, "reasoning_content", None)
         raw_tool_calls = getattr(message, "tool_calls", None) or []
         tool_calls_out = [
             {
@@ -104,11 +96,11 @@ class OpenAICompatibleProvider:
             payload={},
             usage=dict(self.last_usage),
             tool_calls=tool_calls_out,
-            finish_reason=finish_reason,
-            reasoning_content=reasoning_content,
+            finish_reason=getattr(choice, "finish_reason", None),
+            reasoning_content=getattr(message, "reasoning_content", None),
             raw_messages=[dict(m) for m in messages],
             raw_response_text=(message.content or ""),
-            model=model_name,
+            model=getattr(response, "model", None),
             raw_tool_calls=raw_tool_calls,
         )
 
@@ -133,9 +125,23 @@ def extract_usage(response: Any) -> dict[str, Any]:
         if isinstance(dumped, dict):
             return dumped
     return {
-        "prompt_tokens": getattr(usage, "prompt_tokens", None),
-        "completion_tokens": getattr(usage, "completion_tokens", None),
-        "total_tokens": getattr(usage, "total_tokens", None),
+        k: getattr(usage, k, None)
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
+
+
+def deepseek_runtime_facts() -> dict[str, Any]:
+    """Return read-only DeepSeek runtime facts (PROD-02). Pure: no client, no network."""
+    sample = type("_SampleRateLimit", (Exception,), {})("HTTP 429 rate limit exceeded")
+    return {
+        "default_model": "deepseek-v4-pro",
+        "default_base_url": DEEPSEEK_BETA_BASE_URL,
+        "default_timeout_seconds": 60,
+        "default_sdk_max_retries": 0,
+        "thinking_enabled": True,
+        "reasoning_effort": "max",
+        "tool_choice": "auto",
+        "rate_limit_exception_category": str(classify_exception(sample)["category"]),
     }
 
 
@@ -148,16 +154,8 @@ def deepseek_provider_from_env(
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is required for DeepSeek provider")
-    timeout = (
-        timeout_seconds
-        if timeout_seconds is not None
-        else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "60"))
-    )
-    retries = (
-        max_retries
-        if max_retries is not None
-        else int(os.environ.get("DEEPSEEK_SDK_MAX_RETRIES", "0"))
-    )
+    timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "60"))
+    retries = max_retries if max_retries is not None else int(os.environ.get("DEEPSEEK_SDK_MAX_RETRIES", "0"))
     return OpenAICompatibleProvider(
         model=model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         api_key=api_key,
