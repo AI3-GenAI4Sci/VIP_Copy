@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-26T19:30:00.000Z"
+last_updated: "2026-05-26T20:00:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 2
@@ -17,11 +17,11 @@ progress:
 ## Current Position
 
 Phase: 07 (real-llm-validation) — EXECUTING
-Plan: 3 of 6 complete (07-05, 07-01, 07-02) — Wave 1 done
+Plan: 4 of 6 complete (07-05, 07-01, 07-02, 07-03) — Wave 2 (07-03) done; next focus 07-04 stage runner
 
 - Focus: Real-LLM Validation (VAL-01..06) at batch 20 against DeepSeek `/beta`.
-- Status: 07-02 (evidence-capture-layer) complete 2026-05-26 — `RecordingProvider` content-neutral proxy around `OpenAICompatibleProvider` (D-08) plus per-node JSONL writer `flush_evidence` (D-22b) producing the canonical `messages.jsonl` / `tool_calls.jsonl` / `artifact.json` / `usage.json` layout. Wave 1 (07-01 + 07-02 + 07-05) is now complete; next: Wave 2 plans 07-03 (batch index writers), 07-04 (stage runner), 07-06 (real-LLM execution).
-- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6, unchanged after 07-01 and 07-02.
+- Status: 07-03 (batch-index-writers) complete 2026-05-26 — `machine_judges` (pure VAL-01/02/04 + four D-16 column extractors), `index_writer` (one-row-per-request `index.json` with E2/E3 sharing `len_transferable_disposition_text` at opposite sort directions plus the raw-text passthrough), `batch_summary_writer` (totals + per-VAL fail_lists + bounded `manual_review_queue` per D-13/D-12/D-10 union, capped at the D-16 reading scope of 30). D-22(d) writer/capture separation honoured exactly — zero imports of recording_provider / evidence_writer in the new files. Wave 2 (07-03 sole plan) complete; next: 07-04 (stage runner) and 07-06 (real-LLM execution).
+- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6, unchanged after 07-01, 07-02, and 07-03.
 
 ## Completed Work
 
@@ -33,7 +33,7 @@ Plan: 3 of 6 complete (07-05, 07-01, 07-02) — Wave 1 done
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (in progress) | 3 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence) |
+| 7. Real-LLM Validation (in progress) | 4 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer) |
 
 ## Active Watchlist
 
@@ -59,6 +59,23 @@ Plan: 3 of 6 complete (07-05, 07-01, 07-02) — Wave 1 done
   `ensure_ascii=False` so Chinese reasoning_content is human-legible during
   case analysis.
 
+- Phase 7 batch index writers (07-03 complete) — `machine_judges` exposes
+  pure VAL-01/02/04 judges plus the four D-16 column extractors.
+  `index_writer.write_index(...)` materialises `index.json` with one row
+  per request carrying `len_covers_product_ids` (E1, sort desc),
+  `len_transferable_disposition_text` (SHARED column for E2 sort asc and
+  E3 sort desc — same column at opposite directions per D-16),
+  `transferable_disposition_text` (raw-text passthrough — NOT an
+  E-dimension), `literal_overlap_user_signal_vs_transferable_disposition`
+  (E4, sort desc) plus VAL-01/02/04 booleans (VAL-03 is `null` per
+  D-13/D-14), `reflow_triggered` (D-12), `trial_selected_delta_id`
+  (D-10), and an exception passthrough. `batch_summary_writer` aggregates
+  totals, per-VAL fail_lists, and a bounded `manual_review_queue`
+  (D-13/D-12/D-10 union, capped at 30 with `<truncated: N more>` sentinel
+  per D-16 reading scope). Writer layer is isolated from the 07-02
+  capture layer (D-22d): zero imports of `recording_provider` /
+  `evidence_writer` in the three new files.
+
 - `harness-runtime/` remains untouched until reviewed release promotion.
 
 ## Deferred
@@ -80,6 +97,6 @@ Next command:
 /gsd-execute-phase 7
 ```
 
-Next focus: plans 07-03 / 07-04 / 07-06 (batch-summary indices, three-stage runner mechanics, real-LLM execution). Wave 1 of Phase 7 (07-01 + 07-02 + 07-05) is complete; Wave 2 can now proceed.
+Next focus: plans 07-04 (three-stage runner mechanics) and 07-06 (real-LLM execution). Wave 1 (07-01 + 07-02 + 07-05) is complete; Wave 2 (07-03) is complete; Wave 3 (07-04 → 07-06) can now proceed.
 
 Resume file: `workspace/.planning/phases/07-real-llm-validation/07-CONTEXT.md`
