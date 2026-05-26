@@ -23,6 +23,16 @@ from seers_harness.validation.evidence_writer import flush_evidence
 
 # Plan 07-03 additions — batch index + summary writers (D-10, D-12, D-16, D-22d).
 from seers_harness.validation.index_writer import write_index
+from seers_harness.validation.batch_summary_writer import write_batch_summary
+from seers_harness.validation.machine_judges import (
+    judge_val01,
+    judge_val02,
+    judge_val04,
+    extract_len_covers_product_ids,
+    extract_len_transferable_disposition_text,
+    extract_transferable_disposition_text,
+    extract_literal_overlap,
+)
 
 __all__ = [
     "write_evolution_snapshot",
@@ -33,4 +43,12 @@ __all__ = [
     "flush_evidence",
     # 07-03 additions
     "write_index",
+    "write_batch_summary",
+    "judge_val01",
+    "judge_val02",
+    "judge_val04",
+    "extract_len_covers_product_ids",
+    "extract_len_transferable_disposition_text",
+    "extract_transferable_disposition_text",
+    "extract_literal_overlap",
 ]
