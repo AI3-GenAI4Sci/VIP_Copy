@@ -48,6 +48,7 @@ JSON style follows the workspace pattern from
 from __future__ import annotations
 
 import json
+import os.path
 import sys
 import traceback
 from pathlib import Path
@@ -79,11 +80,21 @@ def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
 
 
 def _flush_one(record: dict, base: Path, index: int) -> None:
-    node_id = record.get("node_id")
-    if not isinstance(node_id, str) or not node_id:
-        node_id = f"req_{index:04d}"
+    fallback = f"req_{index:04d}"
+    node_id = _sanitise_node_id(record.get("node_id"), fallback)
 
     node_dir = base / node_id
+    # Defence-in-depth (CR-04): even after _sanitise_node_id, refuse
+    # any resolved path that escapes ``base``. commonpath raises
+    # ValueError for cross-volume paths on Windows; treat that as a
+    # rejection too.
+    try:
+        common = os.path.commonpath([node_dir.resolve(), base.resolve()])
+    except ValueError:
+        raise ValueError(f"node_id escaped out_dir: {record.get('node_id')!r}")
+    if common != str(base.resolve()):
+        raise ValueError(f"node_id escaped out_dir: {record.get('node_id')!r}")
+
     node_dir.mkdir(parents=True, exist_ok=True)
 
     # messages.jsonl — one line per request message
@@ -103,6 +114,24 @@ def _flush_one(record: dict, base: Path, index: int) -> None:
     # usage.json — prompt_tokens / completion_tokens / total_tokens / model
     usage = record.get("last_usage") or {}
     _write_json(node_dir / "usage.json", usage)
+
+
+def _sanitise_node_id(raw: Any, fallback: str) -> str:
+    """Return a filesystem-safe directory name for ``raw``.
+
+    Strips ``/``, ``\\``, ``:``, leading dots so ``..`` cannot be used
+    to escape the parent directory; falls back to ``fallback`` for
+    empty / non-str / single- or double-dot inputs. The caller MUST
+    additionally check ``commonpath`` after resolution as
+    defence-in-depth — see CR-04 in 07-REVIEW.md.
+    """
+    if not isinstance(raw, str) or not raw:
+        return fallback
+    cleaned = raw.replace("/", "_").replace("\\", "_").replace(":", "_")
+    cleaned = cleaned.lstrip(".")
+    if not cleaned or cleaned in {".", ".."}:
+        return fallback
+    return cleaned
 
 
 def _resolve_artifact(record: dict) -> Any:

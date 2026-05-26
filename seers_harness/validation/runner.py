@@ -402,8 +402,24 @@ def _default_request_ids_provider(
 
 
 def _safe_request_dirname(request_id: str) -> str:
-    """Make a request_id safe for filesystem use (matches test_e2e_smoke.py L124)."""
-    return request_id.replace("/", "_").replace(":", "_")
+    """Make a ``request_id`` safe for use as a directory name.
+
+    Strips ``/``, ``\\``, ``:`` AND leading dots so ``..`` cannot be
+    used to escape the stage directory; empty / single- / double-dot
+    inputs fall back to ``"req"``. Matches the
+    ``evidence_writer._sanitise_node_id`` rule so both writer layers
+    refuse the same shape of malicious ``node_id`` / ``request_id``
+    (CR-04 in 07-REVIEW.md).
+    """
+    if not isinstance(request_id, str) or not request_id:
+        return "req"
+    cleaned = (
+        request_id.replace("/", "_").replace("\\", "_").replace(":", "_")
+    )
+    cleaned = cleaned.lstrip(".")
+    if not cleaned or cleaned in {".", ".."}:
+        return "req"
+    return cleaned
 
 
 def _run_one_request(
