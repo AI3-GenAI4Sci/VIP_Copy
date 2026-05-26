@@ -34,6 +34,13 @@ from seers_harness.validation.machine_judges import (
     extract_literal_overlap,
 )
 
+# Plan 07-04 additions — D-19 trial-failure exception classifier.
+from seers_harness.validation.exception_classifier import (
+    TrialFailure,
+    classify,
+    is_trial_failure,
+)
+
 __all__ = [
     "write_evolution_snapshot",
     # 07-02 additions
@@ -51,4 +58,8 @@ __all__ = [
     "extract_len_transferable_disposition_text",
     "extract_transferable_disposition_text",
     "extract_literal_overlap",
+    # 07-04 additions
+    "TrialFailure",
+    "classify",
+    "is_trial_failure",
 ]
