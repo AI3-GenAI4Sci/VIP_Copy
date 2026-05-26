@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-26T20:00:00.000Z"
+last_updated: "2026-05-26T20:30:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 16
-  completed_plans: 16
-  percent: 33
+  completed_plans: 17
+  percent: 35
 ---
 
 # Project State
@@ -17,11 +17,11 @@ progress:
 ## Current Position
 
 Phase: 07 (real-llm-validation) — EXECUTING
-Plan: 4 of 6 complete (07-05, 07-01, 07-02, 07-03) — Wave 2 (07-03) done; next focus 07-04 stage runner
+Plan: 5 of 6 complete (07-05, 07-01, 07-02, 07-03, 07-04) — Wave 3 (07-04) done; next focus 07-06 real-LLM execution + evidence (the only remaining plan; `autonomous: false`, contains the manual case-analysis checkpoint)
 
 - Focus: Real-LLM Validation (VAL-01..06) at batch 20 against DeepSeek `/beta`.
-- Status: 07-03 (batch-index-writers) complete 2026-05-26 — `machine_judges` (pure VAL-01/02/04 + four D-16 column extractors), `index_writer` (one-row-per-request `index.json` with E2/E3 sharing `len_transferable_disposition_text` at opposite sort directions plus the raw-text passthrough), `batch_summary_writer` (totals + per-VAL fail_lists + bounded `manual_review_queue` per D-13/D-12/D-10 union, capped at the D-16 reading scope of 30). D-22(d) writer/capture separation honoured exactly — zero imports of recording_provider / evidence_writer in the new files. Wave 2 (07-03 sole plan) complete; next: 07-04 (stage runner) and 07-06 (real-LLM execution).
-- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6, unchanged after 07-01, 07-02, and 07-03.
+- Status: 07-04 (stage-runner) complete 2026-05-26 — `seers_harness/validation/exception_classifier.py` (D-19 three-label router: `TrialFailure`/`classify`/`is_trial_failure`, isinstance allow-list, `infra_error` default never silently absorbs) and `seers_harness/validation/runner.py` (CLI `python -m seers_harness.validation.runner` with optional `--stage {1,2,3}` running default Stage 1→2→3 end-to-end with NO inter-stage human checkpoint per D-07; matrix `{1: (1,1), 2: (20,1), 3: (20,20)}` per D-01; fail-fast at request level per D-02; max_retries=3 on the underlying OpenAI client only per D-03 with no wrapper retry; no token cap per D-06; empty `delta_portfolio` at process start per D-18; trial isolation reused via `apply_delta_patch_temporarily` per D-21; output under `tests/smoke/.runs/<ts>/` per D-09; Stage 3 one-shot c=20 with PROD-02 rationale and D-04 rate-mask acknowledgement verbatim in module docstring). Validation package `__init__.py` extended additively. Wave 3 (07-04) complete; only 07-06 (real-LLM execution + evidence, autonomous=false) remains.
+- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6, unchanged after 07-01, 07-02, 07-03, and 07-04.
 
 ## Completed Work
 
@@ -33,7 +33,7 @@ Plan: 4 of 6 complete (07-05, 07-01, 07-02, 07-03) — Wave 2 (07-03) done; next
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (in progress) | 4 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer) |
+| 7. Real-LLM Validation (in progress) | 5 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI) |
 
 ## Active Watchlist
 
@@ -76,6 +76,26 @@ Plan: 4 of 6 complete (07-05, 07-01, 07-02, 07-03) — Wave 2 (07-03) done; next
   capture layer (D-22d): zero imports of `recording_provider` /
   `evidence_writer` in the three new files.
 
+- Phase 7 stage runner (07-04 complete) — `seers_harness/validation/runner.py`
+  exposes the CLI `python -m seers_harness.validation.runner [--stage {1,2,3}]
+  [--out-dir PATH] [--csv PATH] [--num-requests N]`. Default invocation
+  runs Stage 1 → 2 → 3 end-to-end with NO inter-stage human checkpoint
+  (D-07); matrix is `{1: (1,1), 2: (20,1), 3: (20,20)}` per D-01;
+  Stage 3 runs concurrency=20 one-shot (PROD-02 rationale + D-04
+  rate-mask acknowledgement in module docstring). Fail-fast at request
+  level (D-02); provider-side max_retries=3 only (D-03), no wrapper
+  retry; no token cap (D-06); empty `delta_portfolio` at process start
+  (D-18); trial isolation reused via `apply_delta_patch_temporarily`
+  (D-21); output under git-ignored `tests/smoke/.runs/<ts>/` (D-09).
+  Provider injection: `provider_factory` + `scenario_loader` +
+  `nodes_factory` + `request_ids` are DI seams — tests inject fakes
+  without monkey-patching; the runner does NOT bake any DEEPSEEK_API_KEY
+  into source. `seers_harness/validation/exception_classifier.py`
+  exports `classify(exc) -> "trial_failure" | "provider_error" |
+  "infra_error"`, `is_trial_failure(exc)`, and the `TrialFailure`
+  sentinel — D-19 three-label router with explicit isinstance allow-list
+  and `infra_error` default that never silently absorbs.
+
 - `harness-runtime/` remains untouched until reviewed release promotion.
 
 ## Deferred
@@ -97,6 +117,6 @@ Next command:
 /gsd-execute-phase 7
 ```
 
-Next focus: plans 07-04 (three-stage runner mechanics) and 07-06 (real-LLM execution). Wave 1 (07-01 + 07-02 + 07-05) is complete; Wave 2 (07-03) is complete; Wave 3 (07-04 → 07-06) can now proceed.
+Next focus: plan 07-06 (real-LLM execution and evidence — `autonomous: false`, contains the only remaining Phase 7 checkpoint for manual case-analysis review per D-15). Wave 1 (07-01 + 07-02 + 07-05) is complete; Wave 2 (07-03) is complete; Wave 3 (07-04) is complete; only 07-06 remains.
 
 Resume file: `workspace/.planning/phases/07-real-llm-validation/07-CONTEXT.md`
