@@ -13,7 +13,7 @@ covered by phase summaries plus tests. Phase 6 is next.
 | 4 | Rewrite the three development SKILL.md files | Complete | summary `04-SUMMARY.md`; three SKILLs under `workspace/workflow-skills/current/`; 122/122 baseline holds |
 | 5 | Cleanup, deletes, tests, bypass-module regression | Complete | summary `05-SUMMARY.md`; 125/125 suite incl. 20-request E2E smoke |
 | 6 | 5/5 | Complete    | 2026-05-26 |
-| 7 | 5/6 + 07-06 PARTIAL | Partial    | 2026-05-26 — Stage 1 fail-fast on DeepSeek 401 (key suffix `****92c7` rejected); runner mechanics validated; awaiting key rotation + re-run for VAL-01..06 verdicts |
+| 7 | 6/6 (07-06 PARTIAL accepted) | Complete | 2026-05-27 — verified 7/7; 4 Critical review fixes (CR-01..04) committed; 251 pytest baseline holds; on-disk real-LLM evidence at `tests/smoke/.runs/20260526T115449Z/` (Stage 1 PASS + Stage 2 partial fail-fast on DeepSeek malformed-JSON behavioural finding); VAL-03/05/06 verdicts deferred to downstream `case_analysis.md` per D-13/D-14 |
 
 ## Phase Criteria
 
