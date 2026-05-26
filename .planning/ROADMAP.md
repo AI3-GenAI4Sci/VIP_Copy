@@ -13,7 +13,7 @@ covered by phase summaries plus tests. Phase 6 is next.
 | 4 | Rewrite the three development SKILL.md files | Complete | summary `04-SUMMARY.md`; three SKILLs under `workspace/workflow-skills/current/`; 122/122 baseline holds |
 | 5 | Cleanup, deletes, tests, bypass-module regression | Complete | summary `05-SUMMARY.md`; 125/125 suite incl. 20-request E2E smoke |
 | 6 | 5/5 | Complete    | 2026-05-26 |
-| 7 | 6/6 (07-06 PARTIAL accepted) | Complete | 2026-05-27 — verified 7/7; 4 Critical review fixes (CR-01..04) committed; 251 pytest baseline holds; on-disk real-LLM evidence at `tests/smoke/.runs/20260526T115449Z/` (Stage 1 PASS + Stage 2 partial fail-fast on DeepSeek malformed-JSON behavioural finding); VAL-03/05/06 verdicts deferred to downstream `case_analysis.md` per D-13/D-14 |
+| 7 | 6/6 code-side; full real-LLM coverage pending | In progress | 2026-05-27 — code-side ready: 4 Critical review fixes (CR-01..04) committed, pytest 251/251 holds, validation stack 07-01..07-06 modules in place. PARTIAL 07-06 acceptance retracted by user; phase reopens until a full post-CR-01..04 real-LLM re-run completes Stage 1 + Stage 2 (20/20) + Stage 3 (20/20), case_analysis F1..F4 judged excellent, evolution reflow events observed, and WR/IN findings closed or scheduled. |
 
 ## Phase Criteria
 

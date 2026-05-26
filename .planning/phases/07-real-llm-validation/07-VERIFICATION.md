@@ -1,58 +1,74 @@
 ---
 phase: 07-real-llm-validation
 verified: 2026-05-27T00:00:00Z
-status: passed
-score: 7/7 must-haves verified (PARTIAL 07-06 outcome accepted by user)
-overrides_applied: 1
-overrides:
-  - must_have: "20 real DeepSeek scenarios complete in a single happy-path run"
-    reason: |
-      Stage 2 fail-fasted on request 2 of 20 because DeepSeek itself returned a
-      malformed tool_call.arguments JSON (truncated at char 3617). This is a
-      real-LLM behavioural finding under the harness, not a runner defect. The
-      runner's D-01 / D-02 / D-07 / D-09 / D-12 / D-17 / D-18 / D-19 / D-22
-      contracts all held end-to-end. Phase 7 deliverable is "the stack runs real
-      scenarios AND we have evidence to read", not "every request succeeds at
-      the LLM layer". The user explicitly accepted PARTIAL as the legitimate
-      phase outcome (see 07-06-SUMMARY.md, 07-EXECUTION-LOG.md).
-    accepted_by: user
-    accepted_at: 2026-05-27T00:00:00Z
+status: gaps_found
+score: mechanism-ready / phase-incomplete — code-side CR-01..04 closed and pytest 251/251 holds, but the user's acceptance bar is now full real-LLM coverage (20/20 Stage 2 + 20/20 Stage 3 happy-path captures, case_analysis.md F1..F4 confirmed excellent, concurrency=20 actually exercised, evolution reflow events observed end-to-end). The prior PARTIAL override was retracted by the user on 2026-05-27.
+override_retracted_at: 2026-05-27T00:00:00Z
+override_retracted_reason: |
+  User rescinded the PARTIAL-acceptance override and raised the acceptance bar:
+  phase 7 is only complete when the full real-LLM re-run on the post-CR-01..04
+  code passes end-to-end (Stage 1 + 20/20 Stage 2 + 20/20 Stage 3), case-reading
+  produces excellent verdicts on F1..F4, the evolution mechanism is observed
+  firing on real runs, and high-concurrency Stage 3 actually exercises c=20.
+  The next real-LLM run must use the post-CR-01..04 code so the cause-chain
+  classifier, secret redaction, path sanitisation, and CLI wiring are all
+  exercised on live DeepSeek traffic.
 roadmap_truths:
   - "20 real DeepSeek scenarios run through the stack with tool calls"
   - "Clean copy on real runs"
   - "Transferable factors on real runs"
   - "Reachable reflection on real runs"
   - "Expected evolution reflow events on real runs"
-gaps: []
-deferred:
-  - truth: "Full 20/20 Stage 2 + 20/20 Stage 3 happy-path coverage"
-    addressed_in: "Phase 7 follow-up (out-of-scope for 07-06)"
-    evidence: |
-      Resume path documented in 07-06-SUMMARY.md and 07-EXECUTION-LOG.md
-      (closing summary): either gate-out `-6834636343439087307` and re-run
-      `--stage 2 && --stage 3`, or harden `_parse_args` to tolerate the
-      truncated payload. Neither is required for 07-06's PARTIAL acceptance.
-  - truth: "VAL-03 verdict (reflection tools reachable)"
-    addressed_in: "Downstream manual case-analysis (D-13 / D-14)"
-    evidence: |
-      VAL-03_pass = null in every index.json row by D-13 design; case_analysis.md
-      template exists with VAL-03 section ready for user-confirmed verdict.
-  - truth: "VAL-05 verdict (case-reading confirms transferable factors)"
-    addressed_in: "Downstream manual case-analysis (D-13 / D-14 / D-15)"
-    evidence: |
-      case_analysis.md template carries the four D-15 F1..F4 sub-headings
-      verbatim. Two successful real-DeepSeek artifacts on disk under
-      tests/smoke/.runs/20260526T115449Z/ are sufficient evidence for the user
-      to populate F1..F4 verdicts. Reading is a downstream user activity per
-      D-14.
-  - truth: "VAL-06 verdict (evolution reflow events)"
-    addressed_in: "Downstream manual case-analysis + Phase 7 follow-up"
-    evidence: |
-      evolution_snapshot.json present per request (D-17/D-22c). Zero trials in
-      Stage 1 / early Stage 2 is expected per D-18 (portfolio starts empty;
-      deltas distill in-flight). VAL-06 cadence verdict requires manual reading
-      of case_analysis.md (D-13) and/or a longer run; both are downstream of
-      07-06's evidence-production deliverable.
+gaps:
+  - truth: "20 real DeepSeek scenarios run through the stack with tool calls"
+    status: not_yet_verified_on_post_CR_code
+    blocker: |
+      The only real-LLM run on disk (tests/smoke/.runs/20260526T115449Z/) was
+      executed BEFORE CR-01..04 landed. To prove the post-fix stack is real-LLM
+      ready, a fresh end-to-end run is required: Stage 1 (1×1) → Stage 2 (20×1)
+      → Stage 3 (20×20). All 20×3 = 60 requests across Stage 2 + Stage 3 must
+      complete with valid 3-node artifacts, OR the failures must be classified
+      and triaged (DeepSeek-side malformed payloads gate-listed; runner defects
+      fixed; re-run until clean).
+  - truth: "Clean copy on real runs (VAL-04 leak-free across 20 scenarios)"
+    status: not_yet_verified_on_post_CR_code
+    blocker: |
+      machine_judges.judge_val04 must pass on every captured row; case-reading
+      must confirm zero user-history token / Arabic digit / state-label leakage
+      across the 20 scenarios.
+  - truth: "Transferable factors on real runs (VAL-05 F1..F4 case-reading excellent)"
+    status: not_yet_verified
+    blocker: |
+      case_analysis.md must be populated with F1..F4 verdicts on the new run's
+      evidence; user judges them excellent against the project's transferable-
+      disposition standard.
+  - truth: "Reachable reflection on real runs (VAL-03)"
+    status: not_yet_verified
+    blocker: |
+      VAL-03_pass is null in index.json by D-13 design; user-confirmed verdict
+      via case_analysis.md is required after the new run produces evidence.
+  - truth: "Expected evolution reflow events on real runs (VAL-06)"
+    status: not_yet_verified
+    blocker: |
+      delta_portfolio starts empty per D-18, but the deltas-distill-in-flight
+      mechanism must actually fire and produce non-empty trials[] in at least
+      one evolution_snapshot.json across the 20 scenarios. The phase-7 follow-
+      up scope (07-06 evolution wiring) must be exercised end-to-end.
+  - truth: "High-concurrency Stage 3 actually runs at c=20"
+    status: not_yet_verified
+    blocker: |
+      In the prior run Stage 3 was never started (Stage 2 fail-fast). The post-
+      CR run must reach Stage 3 and complete 20 concurrent requests so D-04
+      acknowledgement and PROD-02 burst tolerance are validated on real DeepSeek
+      with the post-CR-01..04 code.
+  - truth: "Code-review WR/IN remediation"
+    status: scope_dependent
+    blocker: |
+      WR-01..06 + IN-01..08 are advisory in 07-REVIEW.md. The user's bar
+      includes "Info etc 都落地", so each remaining row must be either fixed,
+      explicitly waived with rationale, or scheduled to a follow-up phase
+      before phase 7 is closed.
+deferred: []
 human_verification:
   - test: "Populate case_analysis.md VAL-03 section"
     expected: |
@@ -92,21 +108,38 @@ through the stack with tool calls, clean copy, transferable factors, reachable
 reflection, and expected evolution reflow events."
 
 **Verified:** 2026-05-27T00:00:00Z
-**Status:** passed (with explicit PARTIAL 07-06 outcome override and downstream
-manual case-analysis deferral)
-**Re-verification:** No — initial verification.
+**Status:** gaps_found — code-side ready, real-LLM coverage incomplete
+**Re-verification:** No — initial verification, then PARTIAL acceptance retracted.
+
+## Status update — 2026-05-27 user rescission
+
+The earlier `passed (PARTIAL accepted)` verdict was retracted by the user. The
+acceptance bar is now:
+
+1. **A fresh real-LLM run on the post-CR-01..04 code** completes Stage 1 +
+   Stage 2 (20/20) + Stage 3 (20/20) end-to-end. Failures must be triaged
+   (DeepSeek-side gated out OR runner-side fixed) and the run re-driven until
+   clean.
+2. **case_analysis.md F1..F4 verdicts are populated and judged excellent**
+   against the project's transferable-disposition standard.
+3. **Evolution mechanism observed firing on real runs** — at least one
+   `evolution_snapshot.json` carries non-empty `trials[]` with the expected
+   reflow events.
+4. **High-concurrency Stage 3 actually executes at c=20** on real DeepSeek.
+5. **WR-01..06 and IN-01..08 from 07-REVIEW.md** are each closed, explicitly
+   waived with rationale, or scheduled to a follow-up phase.
+
+Until all five conditions hold, phase 7 stays at `gaps_found`. The next
+execute-phase pass closes them.
 
 ## Verification narrative (Chinese summary for the user)
 
-总体结论：Phase 7 **通过**。所有六个 plan（07-01 至 07-06）的代码层交付物都
-落盘，4 个 Critical review fix 全部就位，pytest 251 全绿，
-`tests/smoke/.runs/20260526T115449Z/` 下有真实 DeepSeek 的 6 个完整 per-node
-evidence + 1 个 partial-on-fail-fast capture。Stage 2 在第 2 个 request 上
-fail-fast 的原因是 DeepSeek 自身返回了被截断到 3617 字符的 malformed
-`tool_call.arguments` JSON——这是 real-LLM 行为发现，runner mechanics
-（D-01/D-02/D-07/D-09/D-12/D-17/D-18/D-19/D-22）契约全部成立。用户已明确
-接受 PARTIAL 作为合法的 phase outcome。VAL-03/05/06 的最终 verdict 按 D-13/
-D-14 设计交给 `case_analysis.md` 下游人工 case-reading。
+代码层（CR-01..04 全部 commit、pytest 251 全绿、validation stack 07-01..07-05
+模块齐全、07-06 evidence-capture pipeline 可端到端跑）已就绪。但用户已经撤回了
+PARTIAL acceptance：phase 7 在所有真实 LLM 机制全部跑通并产出优秀 case 之前不算
+完成。下一轮 execute-phase 必须基于 post-CR-01..04 的代码重新发起一次完整的真实
+LLM 跑批，并把 case_analysis、reflow、concurrency=20 都实地确认。原先 PARTIAL
+override 已记录在 frontmatter `override_retracted_*` 字段中。
 
 ---
 

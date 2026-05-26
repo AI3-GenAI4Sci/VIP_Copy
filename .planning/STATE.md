@@ -2,26 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone_complete
-last_updated: "2026-05-27T00:00:00.000Z"
+status: executing
+last_updated: "2026-05-27T01:00:00.000Z"
 progress:
   total_phases: 7
-  completed_phases: 7
+  completed_phases: 6
   total_plans: 22
-  completed_plans: 22
-  percent: 100
-last_gate_trip: 07-06/Task2 (PARTIAL accepted — DeepSeek malformed tool_call.arguments JSON behavioural finding; runner D-01..D-22 contracts held; 4 Critical review fixes CR-01..04 committed; phase verified 7/7)
+  completed_plans: 21
+  percent: 95
+last_gate_trip: 07-06/Task2 — PARTIAL acceptance retracted by user 2026-05-27; phase reopens until post-CR-01..04 real-LLM re-run completes Stage 1 + 20/20 Stage 2 + 20/20 Stage 3, case_analysis F1..F4 judged excellent, evolution reflow events observed, and WR/IN findings closed or scheduled
 ---
 
 # Project State
 
 ## Current Position
 
-Phase: 07 (real-llm-validation) — VERIFIED 2026-05-27. All four Critical findings from 07-REVIEW.md remediated and committed (CR-01 c2386a7, CR-02 609020d, CR-03 9810f85, CR-04 2cd75a0); pytest baseline 251/251 holds; gsd-verifier produced `07-VERIFICATION.md` with status `passed` (7/7 must_haves; PARTIAL 07-06 outcome accepted by user as legitimate real-LLM behavioural finding; VAL-03/05/06 verdicts deferred to downstream `case_analysis.md` per D-13/D-14). Real-LLM evidence on disk under git-ignored `tests/smoke/.runs/20260526T115449Z/`: Stage 1 full success, Stage 2 req1 full success, Stage 2 req2 partial-on-fail-fast (DeepSeek truncated `tool_call.arguments` at char 3617). Validation stack 07-01..07-05 modules + 07-06 evidence are the phase deliverable.
+Phase: 07 (real-llm-validation) — EXECUTING (code-side ready, full real-LLM coverage pending). 4 Critical review fixes (CR-01..04) committed and pytest 251/251 holds, but the user has rescinded the prior PARTIAL acceptance of 07-06. The new bar: a fresh real-LLM run on the post-CR-01..04 code must complete Stage 1 + Stage 2 (20/20) + Stage 3 (20/20), `case_analysis.md` F1..F4 verdicts must be populated and judged excellent, the evolution mechanism must be observed firing on real runs (at least one non-empty `trials[]` in an `evolution_snapshot.json`), Stage 3 high-concurrency c=20 must actually execute on live DeepSeek, and the WR/IN advisory findings in 07-REVIEW.md must each be closed, explicitly waived, or scheduled to a follow-up phase.
 
-- Focus: Real-LLM Validation (VAL-01..06) — all phase-7 deliverables landed; downstream case-reading (case_analysis.md) is the next user-driven step.
+- Focus: real-LLM full re-run on post-CR-01..04 code, then case-reading + evolution observation.
 - Verified baseline: 251 workspace tests pass after CR-01..04 fixes (`pytest -q` returns `251 passed in 0.78s`). No skips, no new failures, no schema drift.
-- Code-review remediation: 4/4 Critical findings closed atomically; Warnings (WR-01..06) and Infos (IN-01..08) remain advisory and scoped out of phase 7.
+- Code-review remediation: 4/4 Critical findings closed atomically; Warnings (WR-01..06) and Infos (IN-01..08) **still open** under the user's revised acceptance bar.
 
 ## Completed Work
 
@@ -33,7 +33,7 @@ Phase: 07 (real-llm-validation) — VERIFIED 2026-05-27. All four Critical findi
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation | 6 | `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI), `07-05-SUMMARY.md` (case-analysis template), `07-06-SUMMARY.md` PARTIAL-accepted (Stage 1 PASS + Stage 2 req1 PASS + Stage 2 req2 fail-fast on DeepSeek malformed-JSON behavioural finding; runner D-01..D-22 contracts held); `07-REVIEW.md` 4 Critical findings remediated atomically: CR-01 c2386a7 (classify cause-chain walk), CR-02 609020d (CLI flag wiring), CR-03 9810f85 (`_secrets.safe_exc` redaction), CR-04 2cd75a0 (`_sanitise_node_id` + commonpath defence); `07-VERIFICATION.md` status `passed` 7/7 |
+| 7. Real-LLM Validation (in progress — code-side ready, real-LLM coverage pending) | 6 plans delivered | `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI), `07-05-SUMMARY.md` (case-analysis template), `07-06-SUMMARY.md` PARTIAL (pre-CR run only — under user's revised bar, requires a fresh post-CR-01..04 re-run); `07-REVIEW.md` 4 Critical findings remediated atomically: CR-01 c2386a7, CR-02 609020d, CR-03 9810f85, CR-04 2cd75a0; `07-VERIFICATION.md` status `gaps_found` after PARTIAL acceptance retraction (2026-05-27) |
 
 ## Active Watchlist
 
@@ -117,21 +117,24 @@ Phase: 07 (real-llm-validation) — VERIFIED 2026-05-27. All four Critical findi
 
 ## Resume Instruction
 
-Phase 7 is verified (`07-VERIFICATION.md` status `passed`, 7/7 must_haves). The milestone is complete from the GSD workflow's perspective. The next user-driven step lives outside execute-phase per D-13/D-14:
+Phase 7 reopened on 2026-05-27 after the user rescinded PARTIAL acceptance of 07-06. The next pass must run a full real-LLM re-validation on the post-CR-01..04 code:
 
-```
-# Open the case-reading template on the 3 captured runs under
-# tests/smoke/.runs/20260526T115449Z/ to populate VAL-03 / VAL-05 / VAL-06 verdicts.
+```bash
+# 1. Confirm DEEPSEEK_API_KEY is set (and the key is valid — prior run hit a 401 once)
+[ -n "${DEEPSEEK_API_KEY:-}" ] || echo "ERROR: export DEEPSEEK_API_KEY first"
+
+# 2. Sanity: code is on commit 0e7d476 or later (CR-01..04 + tracking landed)
+git log --oneline -5
+
+# 3. Full three-stage real-LLM run (~45-60 min budget; Opus reasoning ~5min/node)
+python -m seers_harness.validation.runner
+
+# 4. After the run lands evidence under tests/smoke/.runs/<ts>/, populate case-reading
 $EDITOR .planning/phases/07-real-llm-validation/case_analysis.md
 ```
 
-Optional: re-run additional Stage 2 / Stage 3 captures after gating out the malformed-JSON request_id `-6834636343439087307`, or after upstream DeepSeek behaviour changes:
+The next execute-phase invocation should drive: a fresh real-LLM run, case_analysis F1..F4 population, evolution-mechanism observation, Stage 3 c=20 confirmation, and WR/IN triage. See the prompt the user prepared for the new window for the full acceptance bar.
 
-```
-python -m seers_harness.validation.runner --stage 2
-python -m seers_harness.validation.runner --stage 3
-```
-
-Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION.md`.
+Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION.md` (status `gaps_found`, override_retracted_at recorded in frontmatter).
 Plan summaries: `workspace/.planning/phases/07-real-llm-validation/07-0{1..6}-SUMMARY.md`.
-Code-review: `workspace/.planning/phases/07-real-llm-validation/07-REVIEW.md` (4 Critical fixes CR-01..04 closed; WR/IN remain advisory).
+Code-review: `workspace/.planning/phases/07-real-llm-validation/07-REVIEW.md` — Critical CR-01..04 closed; WR-01..06 + IN-01..08 still open and in scope under the revised acceptance bar.

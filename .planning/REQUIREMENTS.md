@@ -104,12 +104,12 @@ phase summaries and tests.
 
 | ID | Requirement | Status |
 |---|---|---|
-| VAL-01 | Run 20 real DeepSeek scenarios from `.env.local`. | Partial-accepted (Stage 1 PASS + Stage 2 req1 PASS + Stage 2 req2 fail-fast on DeepSeek malformed-JSON; runner mechanics held; user-accepted as legitimate phase outcome) |
-| VAL-02 | Every scenario emits at least one tool call. | Verified on captured runs (`tool_calls.jsonl` populated for all 3 nodes in successful captures) |
-| VAL-03 | Reflection tools are reachable in real runs. | Deferred to case_analysis.md per D-13/D-14 |
-| VAL-04 | Candidate text has zero user-history token, Arabic digit, or state-label leakage. | Code-side `machine_judges.judge_val04` implemented; final verdict deferred to case_analysis.md |
-| VAL-05 | Case-reading confirms transferable factors. | Deferred to case_analysis.md per D-13/D-14 |
-| VAL-06 | Evolution reflow fires according to scenario cadence. | Deferred to case_analysis.md per D-13/D-14 (`evolution_snapshot.json` captured per-request) |
+| VAL-01 | Run 20 real DeepSeek scenarios from `.env.local`. | Pending — code-side ready (post-CR-01..04), full real-LLM re-run required for verdict |
+| VAL-02 | Every scenario emits at least one tool call. | Pending — depends on VAL-01 re-run capturing 20 successful scenarios |
+| VAL-03 | Reflection tools are reachable in real runs. | Pending — case_analysis.md verdict after VAL-01 re-run |
+| VAL-04 | Candidate text has zero user-history token, Arabic digit, or state-label leakage. | Pending — `machine_judges.judge_val04` ready; needs leak-free verdict across 20 scenarios |
+| VAL-05 | Case-reading confirms transferable factors. | Pending — case_analysis.md F1..F4 verdicts after VAL-01 re-run |
+| VAL-06 | Evolution reflow fires according to scenario cadence. | Pending — needs ≥1 non-empty `trials[]` in `evolution_snapshot.json` from a live run |
 
 ## Cross-Phase Process
 
