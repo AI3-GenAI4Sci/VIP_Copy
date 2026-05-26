@@ -387,6 +387,69 @@ def _has_private_term(record: TrajectoryRecord) -> bool:
     return False
 
 
+# --------------------------------------------------------------------------- #
+# Portfolio assembly + observability seam (Phase 7 plan 07-01) — D-11, D-22(c) #
+# --------------------------------------------------------------------------- #
+
+
+def assemble_portfolio(
+    existing_portfolio: list[DeltaPortfolioRow],
+    new_proposals: list[DeltaProposal],
+    *,
+    events: list[dict] | None = None,
+) -> list[DeltaPortfolioRow]:
+    """Return the post-evolution portfolio assembled from existing rows + new proposals.
+
+    Pure transform: ``existing_portfolio`` passes through unchanged, then any
+    ``DeltaProposal`` whose ``delta_id`` is not already in the portfolio is
+    converted into a fresh ``DeltaPortfolioRow`` (seed bandit prior; zero
+    sample counts). The function never mutates either input list.
+
+    When ``events`` is ``None``, no side effects occur — this is the byte-
+    identical default required by D-11's "no business-logic change" rule
+    (the plan also requires that no existing call site needs to change;
+    today no caller invokes this function, and the default keeps it inert).
+
+    When ``events`` is supplied, the function appends exactly one
+    ``portfolio_assembled`` dict carrying the pre/post delta-id lists and
+    counts. The downstream ``write_evolution_snapshot`` writer (see
+    ``seers_harness.validation.evolution_snapshot``) reduces these events
+    into the VAL-06 evidence shape.
+    """
+    existing_ids: set[str] = {row.delta_id for row in existing_portfolio}
+    assembled: list[DeltaPortfolioRow] = list(existing_portfolio)
+    for proposal in new_proposals:
+        if proposal.delta_id in existing_ids:
+            continue
+        assembled.append(
+            DeltaPortfolioRow(
+                delta_id=proposal.delta_id,
+                target_skill=proposal.target_skill,
+                change_type=proposal.change_type,
+                observation=proposal.observation,
+                proposed_change=proposal.proposed_change,
+                evidence_refs=list(proposal.evidence_refs),
+                applicable_surface=list(proposal.applicable_surface),
+                failure_types=list(proposal.failure_types),
+            )
+        )
+        existing_ids.add(proposal.delta_id)
+
+    if events is not None:
+        before_ids = [row.delta_id for row in existing_portfolio]
+        after_ids = [row.delta_id for row in assembled]
+        events.append(
+            {
+                "type": "portfolio_assembled",
+                "delta_portfolio_before": before_ids,
+                "delta_portfolio_after": after_ids,
+                "counts": {"before": len(before_ids), "after": len(after_ids)},
+            }
+        )
+
+    return assembled
+
+
 def sediment_trajectories(
     buffer: list[TrajectoryRecord],
     *,
