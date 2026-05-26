@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-last_updated: "2026-05-26T10:00:00.000Z"
+status: executing
+last_updated: "2026-05-26T18:50:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 2
@@ -17,11 +17,11 @@ progress:
 ## Current Position
 
 Phase: 07 (real-llm-validation) — EXECUTING
-Plan: 1 of 6 complete (07-05)
+Plan: 2 of 6 complete (07-05, 07-01)
 
 - Focus: Real-LLM Validation (VAL-01..06) at batch 20 against DeepSeek `/beta`.
-- Status: 07-05 (case-analysis-template) complete 2026-05-26; `case_analysis.md` skeleton on disk with D-13/D-14/D-15/D-16 structure. Next focus: 07-01 / 07-02 / 07-03 / 07-04 / 07-06.
-- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6.
+- Status: 07-01 (evolution-observability-hooks) complete 2026-05-26 — optional `events: list[dict] | None` seams on `assemble_portfolio` + `run_request_trial`, plus `seers_harness.validation.evolution_snapshot.write_evolution_snapshot` writer; default-None paths are byte-identical so 251-test baseline holds. Next focus: 07-02 / 07-03 / 07-04 / 07-06.
+- Verified baseline: 251 workspace tests pass (1 skipped) after Phase 6, unchanged after 07-01.
 
 ## Completed Work
 
@@ -33,7 +33,7 @@ Plan: 1 of 6 complete (07-05)
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (in progress) | 1 | `07-05-SUMMARY.md` (case-analysis template) |
+| 7. Real-LLM Validation (in progress) | 2 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks) |
 
 ## Active Watchlist
 
@@ -43,9 +43,12 @@ Plan: 1 of 6 complete (07-05)
   per-call ceilings — this is observation, not stabilisation.
 
 - Phase 6 evolution observability hooks (trial selection, reflow event,
-  portfolio before/after) may not yet be exposed as a structured surface;
-  Phase 7 plan adds them as a thin layer if missing (no business-logic
-  change).
+  portfolio before/after) are now exposed as a thin `events: list[dict] | None`
+  seam on `assemble_portfolio` and `run_request_trial` (07-01 complete) plus
+  the `write_evolution_snapshot` reducer in `seers_harness.validation`. The
+  default-None paths preserve Phase 6 behaviour byte-identically; downstream
+  plans (07-02 / 07-04) consume the events to build per-request
+  `evolution_snapshot.json` evidence.
 
 - `harness-runtime/` remains untouched until reviewed release promotion.
 
@@ -68,6 +71,6 @@ Next command:
 /gsd-execute-phase 7
 ```
 
-Next focus: plans 07-01 / 07-02 / 07-03 / 07-04 / 07-06 (three-stage runner mechanics, evidence-capture wrapper, batch-summary indices, evolution observability hooks).
+Next focus: plans 07-02 / 07-03 / 07-04 / 07-06 (evidence-capture wrapper, batch-summary indices, three-stage runner mechanics, real-LLM execution).
 
 Resume file: `workspace/.planning/phases/07-real-llm-validation/07-CONTEXT.md`
