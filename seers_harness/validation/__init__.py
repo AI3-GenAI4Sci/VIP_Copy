@@ -21,6 +21,9 @@ from seers_harness.validation.recording_provider import (
 )
 from seers_harness.validation.evidence_writer import flush_evidence
 
+# Plan 07-03 additions — batch index + summary writers (D-10, D-12, D-16, D-22d).
+from seers_harness.validation.index_writer import write_index
+
 __all__ = [
     "write_evolution_snapshot",
     # 07-02 additions
@@ -28,4 +31,6 @@ __all__ = [
     "set_current_node_id",
     "get_current_node_id",
     "flush_evidence",
+    # 07-03 additions
+    "write_index",
 ]
