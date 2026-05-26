@@ -45,6 +45,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from seers_harness.validation._secrets import _safe_message
+
 
 def write_evolution_snapshot(
     events: list[dict],
@@ -85,7 +87,11 @@ def write_evolution_snapshot(
                 entry["exception_class"] = exc_class
             exc_msg = event.get("exception_message")
             if exc_msg is not None:
-                entry["exception_message"] = exc_msg
+                # CR-03: redact secrets / cap length before persisting.
+                # The reducer is the last write barrier before evidence
+                # lands on disk; even if an upstream emitter forgets to
+                # sanitise, we catch it here.
+                entry["exception_message"] = _safe_message(str(exc_msg))
             trials.append(entry)
         # trial_started and any unknown type are intentionally ignored
         # (reducer scope per D-11 degradation rules).

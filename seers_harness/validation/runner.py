@@ -132,6 +132,7 @@ from seers_harness.domain.models import (
     PersonalizedCopyRubricArtifact,
 )
 from seers_harness.workflow.dag_runner import WorkflowRuntime
+from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
 from seers_harness.validation.exception_classifier import classify, is_trial_failure
@@ -586,7 +587,7 @@ def _run_stage(
                     "artifact": None,
                     "reflow_triggered": False,
                     "trial_selected_delta_id": None,
-                    "exception": f"{type(exc).__name__}: {exc}",
+                    "exception": safe_exc(exc),
                 }
                 if is_trial_failure(exc):
                     # Trial-context failure: the trial_runner hook from
@@ -641,7 +642,7 @@ def _run_stage(
                         "artifact": None,
                         "reflow_triggered": False,
                         "trial_selected_delta_id": None,
-                        "exception": f"{type(exc).__name__}: {exc}",
+                        "exception": safe_exc(exc),
                     }
                     if is_trial_failure(exc):
                         records.append(fail_record)
