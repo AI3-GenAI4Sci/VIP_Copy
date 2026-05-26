@@ -249,13 +249,20 @@ _PROVIDER_BUDGET_KEY = "max_" + "retries"  # noqa: assembled to satisfy forbid-l
 _PROVIDER_CTOR_KWARGS: dict[str, Any] = {_PROVIDER_BUDGET_KEY: 3}
 
 
-def _default_scenario_loader() -> ScenarioLoader:
+def _default_scenario_loader(
+    csv: Path | None = None,
+    num_requests: int | None = None,
+) -> ScenarioLoader:
     """Default scenario loader — reads from ``data_100k.csv``.
 
     Returns a closure over a one-pass scratch CSV containing the first
-    20 unique ``request_id``s, mirroring the smoke pattern
+    ``num_requests`` unique ``request_id``s, mirroring the smoke pattern
     (test_e2e_smoke.py L43-L98). The scratch CSV lives in a temp
     directory that is cleaned up implicitly when the process exits.
+
+    Both ``csv`` and ``num_requests`` are CLI overrides (``--csv``
+    / ``--num-requests``); when ``None`` the defaults are
+    ``data_100k.csv`` and ``_DEFAULT_NUM_REQUESTS`` respectively.
     """
     # Imported lazily so the runner does not pay the smoke-import cost
     # in unit tests that inject a fake scenario_loader.
@@ -267,16 +274,22 @@ def _default_scenario_loader() -> ScenarioLoader:
         preprocess_request_from_csv,
     )
 
-    csv_path = Path(__file__).resolve().parents[2] / "data_100k.csv"
+    csv_path = (
+        Path(csv).resolve()
+        if csv is not None
+        else Path(__file__).resolve().parents[2] / "data_100k.csv"
+    )
     if not csv_path.exists():
         raise RuntimeError(
             f"data_100k.csv not present at {csv_path}; supply --csv or "
             "inject a scenario_loader for tests"
         )
 
+    limit = num_requests if num_requests is not None else _DEFAULT_NUM_REQUESTS
+
     scratch_dir = Path(tempfile.mkdtemp(prefix="seers-runner-"))
     scratch_csv = scratch_dir / "scratch.csv"
-    _build_scratch_csv(csv_path, scratch_csv, _DEFAULT_NUM_REQUESTS)
+    _build_scratch_csv(csv_path, scratch_csv, limit)
 
     def loader(request_id: str) -> dict[str, Any]:
         return preprocess_request_from_csv(scratch_csv, request_id=request_id)
@@ -360,17 +373,26 @@ def _default_nodes_factory() -> NodesFactory:
     return make_nodes
 
 
-def _default_request_ids_provider() -> list[str]:
-    """Default request-id list — first 20 unique ids from data_100k.csv."""
+def _default_request_ids_provider(
+    csv: Path | None = None,
+    num_requests: int | None = None,
+) -> list[str]:
+    """Default request-id list — first ``num_requests`` unique ids
+    from ``csv`` (defaults: ``data_100k.csv``, ``_DEFAULT_NUM_REQUESTS``)."""
     import tempfile
-    csv_path = Path(__file__).resolve().parents[2] / "data_100k.csv"
+    csv_path = (
+        Path(csv).resolve()
+        if csv is not None
+        else Path(__file__).resolve().parents[2] / "data_100k.csv"
+    )
     if not csv_path.exists():
         raise RuntimeError(
             f"data_100k.csv not present at {csv_path}; pass request_ids explicitly"
         )
+    limit = num_requests if num_requests is not None else _DEFAULT_NUM_REQUESTS
     scratch_dir = Path(tempfile.mkdtemp(prefix="seers-runner-ids-"))
     scratch_csv = scratch_dir / "scratch.csv"
-    return _build_scratch_csv(csv_path, scratch_csv, _DEFAULT_NUM_REQUESTS)
+    return _build_scratch_csv(csv_path, scratch_csv, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +713,8 @@ def run(
     *,
     stages: Sequence[int] | None = None,
     out_dir: Path | None = None,
+    csv: Path | None = None,
+    num_requests: int | None = None,
     request_ids: Sequence[str] | None = None,
     scenario_loader: ScenarioLoader | None = None,
     nodes_factory: NodesFactory | None = None,
@@ -703,6 +727,11 @@ def run(
     Stage 1 is the only pre-flight gate (D-05): if Stage 1 fails the
     run stops; otherwise Stage 2 starts automatically; if Stage 2
     passes Stage 3 starts automatically.
+
+    ``csv`` and ``num_requests`` are CLI overrides (``--csv``
+    / ``--num-requests``). They are forwarded to the default scenario
+    loader and request-id provider; tests that inject
+    ``scenario_loader`` / ``request_ids`` directly bypass them.
 
     All keyword args are dependency-injection seams for tests; the
     defaults wire the real-DeepSeek path. The runner does NOT call
@@ -721,7 +750,7 @@ def run(
     batch_id = out_dir.name
 
     if scenario_loader is None:
-        scenario_loader = _default_scenario_loader()
+        scenario_loader = _default_scenario_loader(csv=csv, num_requests=num_requests)
 
     if nodes_factory is None:
         nodes_factory = _default_nodes_factory()
@@ -731,7 +760,7 @@ def run(
         provider_factory = _default_deepseek_factory
 
     if request_ids is None:
-        request_ids = _default_request_ids_provider()
+        request_ids = _default_request_ids_provider(csv=csv, num_requests=num_requests)
 
     # Initialise the delta_portfolio EMPTY at process start (D-18).
     # Zero trials in Stage 1 / early Stage 2 is expected, NOT a
@@ -833,6 +862,8 @@ def main(argv: list[str] | None = None) -> int:
     return run(
         stages=stages,
         out_dir=args.out_dir,
+        csv=args.csv,
+        num_requests=args.num_requests,
     )
 
 
