@@ -3,22 +3,22 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-26T11:50:00.000Z"
+last_updated: "2026-05-26T12:45:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 16
   completed_plans: 17
   percent: 35
-last_gate_trip: 07-06/Task2 (Stage 1 fail-fast on DeepSeek 401 — upstream auth, not a runner bug)
+last_gate_trip: 07-06/Task2 retry (Stage 2 fail-fast on real-LLM malformed tool_call.arguments JSON — DeepSeek truncation at char 3617, classified `infra_error` per D-19; runner mechanics held)
 ---
 
 # Project State
 
 ## Current Position
 
-Phase: 07 (real-llm-validation) — EXECUTING (07-06 PARTIAL)
-Plan: 6 of 6 attempted; 07-06 PARTIAL — Stage 1 fail-fasted on a real DeepSeek 401 (`****92c7 is invalid`) per D-02. The runner mechanics (D-01 stage matrix, D-02 fail-fast, D-07 no inter-stage checkpoint, D-09 git-ignored output, D-18 empty-portfolio expected, D-19 classifier behaviour) all held; the partial canonical artifact tree (index.json + batch_summary.json + evolution_snapshot.json) is on disk under `tests/smoke/.runs/20260526T114136Z/`. Per-node `evidence/<node_id>/` JSONLs were not produced because the failure occurred before any provider call returned a payload to record. VAL-01..06 verdicts cannot be recorded until the key is rotated and the pipeline re-run. Resume: `python -m seers_harness.validation.runner --stage 1` after rotating the DeepSeek key.
+Phase: 07 (real-llm-validation) — EXECUTING (07-06 PARTIAL after retry)
+Plan: 6 of 6 attempted; 07-06 PARTIAL — retried after the prior 401, the new run completed Stage 1 (PASS) and Stage 2 req 1 (PASS), then fail-fasted on Stage 2 req 2 (`-6834636343439087307`) when DeepSeek returned malformed `tool_call.arguments` JSON truncated at char 3617 mid-string in a factor's `evidence_refs.path`. `_parse_args` raised `ProviderResponseError`; `dag_runner` re-wrapped as `RuntimeError`; `_run_stage` classified as `infra_error` per D-19; Stage 3 was correctly not started per D-02. The full canonical artifact tree is on disk under `tests/smoke/.runs/20260526T115449Z/`: 2 fully successful per-request evidence captures (Stage 1 `-6834635816105165003`, Stage 2 `-6834635816105165003`) plus 1 partial-on-fail-fast capture for the malformed-JSON failure. Wall-clock 2655s (~44m15s), 126 111 tokens consumed, >99% prompt-cache hit rate per node. The runner's D-01/D-02/D-07/D-09/D-12/D-17/D-18/D-19/D-22 contracts ALL held; what fail-fasted was a real-LLM payload-shape behavioural finding, not a runner defect. The 2 successful artifacts are sufficient for the downstream case-reader to begin populating `case_analysis.md` per D-13/D-14. Resume: either gate-out the malformed-JSON request and rerun `--stage 2` then `--stage 3`, OR begin manual case-reading on the existing artifacts (case-reading is outside execute-phase).
 
 - Focus: Real-LLM Validation (VAL-01..06) at batch 20 against DeepSeek `/beta`.
 - Status: 07-04 (stage-runner) complete 2026-05-26 — `seers_harness/validation/exception_classifier.py` (D-19 three-label router: `TrialFailure`/`classify`/`is_trial_failure`, isinstance allow-list, `infra_error` default never silently absorbs) and `seers_harness/validation/runner.py` (CLI `python -m seers_harness.validation.runner` with optional `--stage {1,2,3}` running default Stage 1→2→3 end-to-end with NO inter-stage human checkpoint per D-07; matrix `{1: (1,1), 2: (20,1), 3: (20,20)}` per D-01; fail-fast at request level per D-02; max_retries=3 on the underlying OpenAI client only per D-03 with no wrapper retry; no token cap per D-06; empty `delta_portfolio` at process start per D-18; trial isolation reused via `apply_delta_patch_temporarily` per D-21; output under `tests/smoke/.runs/<ts>/` per D-09; Stage 3 one-shot c=20 with PROD-02 rationale and D-04 rate-mask acknowledgement verbatim in module docstring). Validation package `__init__.py` extended additively. Wave 3 (07-04) complete; only 07-06 (real-LLM execution + evidence, autonomous=false) remains.
@@ -34,13 +34,15 @@ Plan: 6 of 6 attempted; 07-06 PARTIAL — Stage 1 fail-fasted on a real DeepSeek
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (in progress) | 5 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI); `07-06-SUMMARY.md` PARTIAL (Stage 1 fail-fast on DeepSeek 401; runner mechanics validated; awaiting key rotation + re-run) |
+| 7. Real-LLM Validation (in progress) | 5 | `07-05-SUMMARY.md` (case-analysis template), `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI); `07-06-SUMMARY.md` PARTIAL (retry — Stage 1 PASS + Stage 2 partial fail-fast on real-LLM malformed JSON; 2 successful real-DeepSeek artifacts + 1 partial-on-fail-fast capture on disk under `tests/smoke/.runs/20260526T115449Z/`; runner D-01/D-02/D-07/D-09/D-12/D-17/D-18/D-19/D-22 contracts held end-to-end under both 401 and malformed-JSON failure modes) |
 
 ## Active Watchlist
 
-- **07-06 PARTIAL — DeepSeek 401 on the configured API key (suffix `****92c7`).** Stage 1 of the canonical evidence batch fail-fasted on the very first request with `Authentication Fails, Your api key: ****92c7 is invalid`. The runner classified the wrapped exception as `infra_error` per D-19 (RuntimeError from `dag_runner` is not in the explicit allow-list; the underlying `ProviderAuthError` is preserved in the cause chain captured in `07-EXECUTION-LOG.md`). Resume path: rotate the DeepSeek key, re-run `python -m seers_harness.validation.runner --stage 1` as bring-up, then `python -m seers_harness.validation.runner` for the full pipeline. The partial canonical artifact tree (`stage1/index.json` + `batch_summary.json` + `-6834635816105165003/evolution_snapshot.json`) is on disk under git-ignored `tests/smoke/.runs/20260526T114136Z/`.
+- **07-06 PARTIAL retry — Stage 2 fail-fasted on real-LLM malformed `tool_call.arguments` JSON for request `-6834636343439087307`.** DeepSeek returned a truncated payload at char 3617 mid-string in a factor's `evidence_refs.path`; `_parse_args` raised `ProviderResponseError`; `dag_runner` re-wrapped as `RuntimeError`; `classify(exc)` routed to `infra_error` (D-19 default). Stage 3 was correctly not started per D-02. The deeper `ProviderResponseError` cause chain is preserved in `07-EXECUTION-LOG.md` for downstream audit. Resume options: (a) gate-out the bad request_id and rerun `--stage 2` then `--stage 3`; (b) harden `_parse_args` to tolerate truncated tool_call.arguments (Phase 7 follow-up, not 07-06 scope); (c) begin manual case-reading on the 2 existing successful artifacts (`stage1/-6834635816105165003`, `stage2/-6834635816105165003`).
 
-- **Deferred observation: classify() under-reports `ProviderAuthError` as `infra_error`** when the cause is wrapped by `dag_runner._run_node` into a `RuntimeError`. Per D-19 ("classification is by exception class only, never the message string, never the cause chain") this is the correct contracted behaviour, but it makes the on-disk label diverge from the true upstream cause. The full cause chain is preserved in the EXECUTION-LOG so auditors can recover the truth. **Tagged as a future review point**, not a fix for 07-06 — patching it would violate the 07-04 contract.
+- **Deferred observation: classify() under-reports both `ProviderAuthError` and `ProviderResponseError` as `infra_error`** when the cause is wrapped by `dag_runner._run_node` into a `RuntimeError`. Validated under TWO real-LLM failure paths now (prior 401 + this run's malformed-JSON). Per D-19 ("classification is by exception class only, never the message string, never the cause chain") this is the correct contracted behaviour, but it makes the on-disk label diverge from the true upstream cause. The full cause chain is preserved in the EXECUTION-LOG so auditors can recover the truth. **Tagged as a future review point**, not a fix for 07-06 — patching it would violate the 07-04 contract.
+
+- **Real-LLM cost calibration finding (07-06 retry): `deepseek-v4-pro` reasoning-model latency is ~5min per node, ~15min per 3-node request, ~44min for ~7 attempted calls.** Original 10-25 min budget estimate was based on `deepseek-chat`-class latencies. Phase 7 follow-up budgets should plan for ~15min per 3-node request, NOT a full-pipeline 10-25min envelope. Prompt-cache hit rate >99% per node — real cost is dominated by completion + reasoning tokens, not prompt setup.
 
 - Phase 7 stage 3 (real concurrency target=20) may surface real DeepSeek
   rate-limit ceilings that Phase 6's PROD-02 fact-recording probe did not
@@ -116,15 +118,18 @@ Plan: 6 of 6 attempted; 07-06 PARTIAL — Stage 1 fail-fasted on a real DeepSeek
 
 ## Resume Instruction
 
-Next command (after rotating the DeepSeek API key — current key suffix `****92c7` was rejected with 401):
+The 07-06 retry produced 2 real successful artifacts plus 1 partial-on-fail-fast capture. To advance the phase, the user picks ONE of:
 
 ```
-# Bring-up: re-run only Stage 1 to confirm the new key works
-python -m seers_harness.validation.runner --stage 1
+# Option A — gate out the malformed-JSON request and rerun Stage 2 + Stage 3 only
+# (e.g. by passing an explicit request_id list excluding -6834636343439087307)
+python -m seers_harness.validation.runner --stage 2
+python -m seers_harness.validation.runner --stage 3
 
-# If Stage 1 passes, re-run the full pipeline
-python -m seers_harness.validation.runner
+# Option B — begin manual case-reading immediately on the 2 successful artifacts
+# (this lives outside execute-phase per D-13 / D-14)
+$EDITOR .planning/phases/07-real-llm-validation/case_analysis.md
 ```
 
-Resume file: `workspace/.planning/phases/07-real-llm-validation/07-EXECUTION-LOG.md` (full cause chain + resume steps).
-Plan summary: `workspace/.planning/phases/07-real-llm-validation/07-06-SUMMARY.md` (PARTIAL status).
+Resume file: `workspace/.planning/phases/07-real-llm-validation/07-EXECUTION-LOG.md` (full retry record + cause chain).
+Plan summary: `workspace/.planning/phases/07-real-llm-validation/07-06-SUMMARY.md` (PARTIAL after retry).
