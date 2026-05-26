@@ -14,3 +14,6 @@ data_100k.csv
 .runs/
 .cache/
 *.jsonl
+
+# Local development tests are not synchronized to GitHub.
+tests/
