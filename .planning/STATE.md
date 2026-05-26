@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_plan
-last_updated: "2026-05-26T07:22:16.213Z"
+last_updated: "2026-05-26T09:18:43.953Z"
 progress:
   total_phases: 7
-  completed_phases: 6
-  total_plans: 14
+  completed_phases: 2
+  total_plans: 16
   completed_plans: 14
-  percent: 86
-stopped_at: Phase 7 context gathered — ready to plan
+  percent: 29
 ---
 
 # Project State
@@ -41,10 +40,12 @@ Plan: Not started — context gathered, ready for `/gsd-plan-phase 7`
   rate-limit ceilings that Phase 6's PROD-02 fact-recording probe did not
   see at FakeProvider load. Plan must accept that `max_retries=3` masks
   per-call ceilings — this is observation, not stabilisation.
+
 - Phase 6 evolution observability hooks (trial selection, reflow event,
   portfolio before/after) may not yet be exposed as a structured surface;
   Phase 7 plan adds them as a thin layer if missing (no business-logic
   change).
+
 - `harness-runtime/` remains untouched until reviewed release promotion.
 
 ## Deferred
