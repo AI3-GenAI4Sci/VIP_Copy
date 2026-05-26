@@ -13,7 +13,7 @@ covered by phase summaries plus tests. Phase 6 is next.
 | 4 | Rewrite the three development SKILL.md files | Complete | summary `04-SUMMARY.md`; three SKILLs under `workspace/workflow-skills/current/`; 122/122 baseline holds |
 | 5 | Cleanup, deletes, tests, bypass-module regression | Complete | summary `05-SUMMARY.md`; 125/125 suite incl. 20-request E2E smoke |
 | 6 | 5/5 | Complete    | 2026-05-26 |
-| 7 | 5/6 | In Progress|  |
+| 7 | 5/6 + 07-06 PARTIAL | Partial    | 2026-05-26 — Stage 1 fail-fast on DeepSeek 401 (key suffix `****92c7` rejected); runner mechanics validated; awaiting key rotation + re-run for VAL-01..06 verdicts |
 
 ## Phase Criteria
 
