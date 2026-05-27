@@ -243,6 +243,7 @@ def _distill_delta(delta_id="D-distilled"):
 
 def test_run_one_request_success_record_has_ok_failure_class(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
 
     record = runner._run_one_request(
         request_id="req/success",
@@ -251,6 +252,8 @@ def test_run_one_request_success_record_has_ok_failure_class(monkeypatch, tmp_pa
         provider_factory=lambda: object(),
         request_dir=tmp_path / "req",
         events=[],
+        delta_portfolio=[],
+        live_skill_root=live_skill_root,
     )
 
     assert record["failure_class"] == "ok"
@@ -271,6 +274,8 @@ def test_run_stage_fail_record_has_failure_class_from_cause_chain(monkeypatch, t
         provider_factory=lambda: object(),
         out_dir=tmp_path,
         batch_id="batch-test",
+        delta_portfolio=[],
+        live_skill_root=tmp_path / "workflow-skills",
     )
 
     assert result.records[0]["failure_class"] == "auth"
@@ -440,7 +445,9 @@ def test_distill_after_stage1_empty_proposals_yields_empty_portfolio(tmp_path):
     assert portfolio == []
 
 
-def test_distill_after_stage1_invalid_artifact_raises(tmp_path):
+def test_distill_after_stage1_invalid_artifact_raises(monkeypatch, tmp_path):
+    from seers_harness.agentic import tool_loop
+
     stage_dir = tmp_path / "stage1"
     _write_stage1_evidence(stage_dir)
     result = runner.StageResult(
@@ -450,10 +457,19 @@ def test_distill_after_stage1_invalid_artifact_raises(tmp_path):
         stage_dir=stage_dir,
     )
 
+    def fake_run_skill_via_tools(**kwargs):
+        return type(
+            "ToolLoopResult",
+            (),
+            {"artifact": {"request_id": "req-1", "deltas": [{}]}},
+        )()
+
+    monkeypatch.setattr(tool_loop, "run_skill_via_tools", fake_run_skill_via_tools)
+
     with pytest.raises(ValidationError):
         runner._distill_after_stage1(
             stage1_result=result,
-            provider_factory=lambda: _DistillProvider({"request_id": "req-1", "deltas": [{}]}),
+            provider_factory=lambda: object(),
             current_portfolio=[],
         )
 

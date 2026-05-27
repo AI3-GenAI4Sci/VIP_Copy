@@ -132,6 +132,17 @@ from seers_harness.domain.models import (
     FactorDiscoveryArtifact,
     PersonalizedCopyRubricArtifact,
 )
+from seers_harness.evolution.delta_portfolio import (
+    DeltaDistillationArtifact,
+    DeltaPortfolioRow,
+    assemble_portfolio,
+    update_after_trial,
+)
+from seers_harness.evolution.trial_runner import (
+    SkillDeltaPatch,
+    run_request_trial,
+    sha256_of_text,
+)
 from seers_harness.workflow.dag_runner import WorkflowRuntime
 from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
@@ -165,6 +176,7 @@ _STAGE_CONFIG: dict[int, tuple[int, int]] = {
 
 
 _DEFAULT_RUNS_ROOT = Path("tests/smoke/.runs")
+LIVE_SKILL_ROOT: Path = Path(__file__).resolve().parents[2] / "workflow-skills"
 _DEFAULT_NUM_REQUESTS = 20
 
 
@@ -428,6 +440,105 @@ def _load_env_file(path: Path) -> int:
     return merged
 
 
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
+    """Assemble the Stage 1 trace payload handed to distill-skill-deltas."""
+    node_ids = (
+        "factor_discovery",
+        "copy_generation",
+        "personalized_copy_rubric",
+    )
+    evidence_dir = stage1_request_dir / "evidence"
+    artifacts: dict[str, Any] = {}
+    tool_calls_per_node: dict[str, list[dict]] = {}
+    usage_per_node: dict[str, Any] = {}
+
+    for node_id in node_ids:
+        node_dir = evidence_dir / node_id
+        artifacts[node_id] = _read_json(node_dir / "artifact.json")
+        tool_calls_per_node[node_id] = _read_jsonl(node_dir / "tool_calls.jsonl")
+        usage_per_node[node_id] = _read_json(node_dir / "usage.json")
+
+    return {
+        "request_id": stage1_request_dir.name,
+        "factor_discovery": artifacts["factor_discovery"],
+        "copy_generation": artifacts["copy_generation"],
+        "personalized_copy_rubric": artifacts["personalized_copy_rubric"],
+        "tool_calls_per_node": tool_calls_per_node,
+        "usage_per_node": usage_per_node,
+    }
+
+
+def _distill_after_stage1(
+    *,
+    stage1_result: StageResult,
+    provider_factory: ProviderFactory,
+    current_portfolio: list[DeltaPortfolioRow],
+) -> list[DeltaPortfolioRow]:
+    rid = stage1_result.records[0]["request_id"]
+    stage1_request_dir = stage1_result.stage_dir / _safe_request_dirname(rid)
+    trajectory_payload = _build_trajectory_payload(stage1_request_dir)
+    skill_bundle = (
+        LIVE_SKILL_ROOT / "evolution/distill-skill-deltas/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    from seers_harness.agentic.tool_loop import run_skill_via_tools
+    from seers_harness.tools.evolution_tools import (
+        EVOLUTION_TOOL_HANDLERS,
+        EVOLUTION_TOOLS_SPEC,
+    )
+
+    distill_provider = RecordingProvider(provider_factory(), [])
+    print(
+        f"[runner] distill_after_stage1: starting agent, stage1_request_id={rid}",
+        file=sys.stderr,
+    )
+    result = run_skill_via_tools(
+        skill_name="distill-skill-deltas",
+        skill_bundle=skill_bundle,
+        payload=trajectory_payload,
+        tools_spec=EVOLUTION_TOOLS_SPEC["distill-skill-deltas"],
+        tool_handlers=EVOLUTION_TOOL_HANDLERS,
+        provider=distill_provider,
+        node_id="distill_after_stage1",
+    )
+    artifact = DeltaDistillationArtifact.model_validate(result.artifact)
+    print(
+        "[runner] distill_after_stage1: "
+        f"produced {len(artifact.deltas)} proposals "
+        f"(delta_ids={[p.delta_id for p in artifact.deltas]})",
+        file=sys.stderr,
+    )
+    return assemble_portfolio(current_portfolio, artifact.deltas, events=None)
+
+
+def _patch_from_portfolio_row(
+    row: DeltaPortfolioRow, live_skill_root: Path
+) -> SkillDeltaPatch | None:
+    if row.change_type != "modify_skill":
+        return None
+    live_target = live_skill_root / row.target_skill
+    if not live_target.exists():
+        return None
+    live_text = live_target.read_text(encoding="utf-8")
+    return SkillDeltaPatch(
+        target_path=row.target_skill,
+        original_text_sha256=sha256_of_text(live_text),
+        replacement_text=row.proposed_change,
+    )
+
+
 def _run_one_request(
     *,
     request_id: str,
@@ -436,6 +547,8 @@ def _run_one_request(
     provider_factory: ProviderFactory,
     request_dir: Path,
     events: list[dict],
+    delta_portfolio: list[DeltaPortfolioRow],
+    live_skill_root: Path,
 ) -> dict[str, Any]:
     """Drive ONE request end-to-end through the harness chain.
 
@@ -519,6 +632,33 @@ def _run_one_request(
             raw = json.loads(Path(p).read_text(encoding="utf-8"))
             model.model_validate(raw)
 
+        for index, portfolio_row in enumerate(delta_portfolio):
+            patch = _patch_from_portfolio_row(portfolio_row, live_skill_root)
+            if patch is None:
+                continue
+            trial_workspace = request_dir / "trial_workspace" / portfolio_row.delta_id
+            trial_outcome = run_request_trial(
+                runtime=WorkflowRuntime(
+                    provider=proxy,
+                    output_dir=trial_workspace / "_artifacts",
+                ),
+                scenario=scenario,
+                nodes=list(nodes),
+                live_skill_root=live_skill_root,
+                workspace_dir=trial_workspace,
+                patch=patch,
+                request_id=request_id,
+                scenario_id=str(scenario.get("scenario_id", "")),
+                events=events,
+            )
+            if trial_outcome.trial_delta_id is not None:
+                record["trial_selected_delta_id"] = trial_outcome.trial_delta_id
+            delta_portfolio[index] = update_after_trial(
+                portfolio_row,
+                success=trial_outcome.success,
+                token_cost_delta=trial_outcome.token_cost_observed,
+            )
+
     finally:
         # Always restore the contextvar even on exception, then flush
         # whatever evidence was captured before the failure scene.
@@ -550,6 +690,8 @@ def _run_stage(
     provider_factory: ProviderFactory,
     out_dir: Path,
     batch_id: str,
+    delta_portfolio: list[DeltaPortfolioRow],
+    live_skill_root: Path,
 ) -> StageResult:
     """Run one stage and write index.json / batch_summary.json.
 
@@ -596,6 +738,8 @@ def _run_stage(
                     provider_factory=provider_factory,
                     request_dir=request_dir,
                     events=events,
+                    delta_portfolio=delta_portfolio,
+                    live_skill_root=live_skill_root,
                 )
                 records.append(record)
             except BaseException as exc:
@@ -650,6 +794,8 @@ def _run_stage(
                     provider_factory=provider_factory,
                     request_dir=stage_dir / _safe_request_dirname(rid),
                     events=per_request_events[rid],
+                    delta_portfolio=delta_portfolio,
+                    live_skill_root=live_skill_root,
                 ): rid
                 for rid in stage_request_ids
             }
@@ -788,10 +934,9 @@ def run(
         request_ids = _default_request_ids_provider(csv=csv, num_requests=num_requests)
 
     # Initialise the delta_portfolio EMPTY at process start (D-18).
-    # Zero trials in Stage 1 / early Stage 2 is expected, NOT a
-    # fail-fast trigger. The portfolio is built up by 07-06's
-    # distill-skill-deltas integration; 07-04 keeps it empty.
-    _delta_portfolio_empty: list[Any] = []  # noqa: F841 (audit anchor; D-18)
+    # Stage 1 runs without trials; after Stage 1 passes, distillation may
+    # populate this list for Stage 2/3 trials.
+    delta_portfolio: list[DeltaPortfolioRow] = []
 
     print(
         f"[runner] start batch_id={batch_id} stages={list(stages)} "
@@ -810,6 +955,8 @@ def run(
             provider_factory=provider_factory,
             out_dir=out_dir,
             batch_id=batch_id,
+            delta_portfolio=delta_portfolio,
+            live_skill_root=LIVE_SKILL_ROOT,
         )
         if not result.passed:
             print(
@@ -819,6 +966,12 @@ def run(
             )
             return 1
         print(f"[runner] stage {stage} PASSED", file=sys.stderr)
+        if stage == 1:
+            delta_portfolio = _distill_after_stage1(
+                stage1_result=result,
+                provider_factory=provider_factory,
+                current_portfolio=delta_portfolio,
+            )
 
     print("[runner] all requested stages passed", file=sys.stderr)
     return 0
