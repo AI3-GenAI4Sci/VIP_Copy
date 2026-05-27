@@ -119,6 +119,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -420,6 +421,24 @@ def _safe_request_dirname(request_id: str) -> str:
     if not cleaned or cleaned in {".", ".."}:
         return "req"
     return cleaned
+
+
+def _load_env_file(path: Path) -> int:
+    """Parse KEY=VALUE lines into this process environment."""
+    if not path.exists():
+        raise RuntimeError(f"--env-file path not found: {path}")
+    merged = 0
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        os.environ[key] = value
+        merged += 1
+    return merged
 
 
 def _run_one_request(
@@ -868,7 +887,20 @@ def main(argv: list[str] | None = None) -> int:
             f"{_DEFAULT_NUM_REQUESTS}. Stage 1 only consumes the first id."
         ),
     )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="Path to KEY=VALUE env file (no shell expansion)",
+    )
     args = parser.parse_args(argv)
+
+    if args.env_file is not None:
+        count = _load_env_file(args.env_file)
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        suffix = api_key[-4:] if api_key else "<unset>"
+        print(f"[runner] env-file: loaded {count} keys from {args.env_file}", file=sys.stderr)
+        print(f"[runner] env-file: DEEPSEEK_API_KEY suffix=****{suffix}", file=sys.stderr)
 
     stages: tuple[int, ...]
     if args.stage is None:
