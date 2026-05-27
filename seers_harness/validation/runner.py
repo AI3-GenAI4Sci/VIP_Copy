@@ -240,19 +240,13 @@ def _default_deepseek_factory() -> Any:
         deepseek_provider_from_env,
     )
 
-    # D-03 budget passed as **kwargs so the literal "max_retries=3" stays
-    # in the comment block above and does not appear at the call site
-    # — the planner forbids any in-line re-attempt knob in this file.
-    return deepseek_provider_from_env(**_PROVIDER_CTOR_KWARGS)
+    return deepseek_provider_from_env(max_retries=_RUNNER_PROVIDER_MAX_RETRIES)
 
 
 # D-03 transient-error budget for the underlying OpenAI client. The
 # value 3 is provider-side ONLY (no wrapper layer in this module per
-# the runner module-docstring forbid list). The kwarg key is built at
-# runtime to keep this file free of the literal re-attempt knob token
-# at module scope (planner forbid-list).
-_PROVIDER_BUDGET_KEY = "max_" + "retries"  # noqa: assembled to satisfy forbid-list scan
-_PROVIDER_CTOR_KWARGS: dict[str, Any] = {_PROVIDER_BUDGET_KEY: 3}
+# the runner module-docstring forbid list).
+_RUNNER_PROVIDER_MAX_RETRIES: int = 3  # D-03 budget
 
 
 def _default_scenario_loader(
@@ -308,7 +302,7 @@ def _build_scratch_csv(csv_path: Path, scratch_path: Path, limit: int) -> list[s
     first ``limit`` unique request_ids (mirrors test_e2e_smoke.py)."""
     import csv as _csv
 
-    delimiter = _detect_delimiter(csv_path)
+    delimiter = detect_delimiter(csv_path)
     seen: set[str] = set()
     chosen_order: list[str] = []
     captured_lines: list[str] = []
@@ -350,17 +344,6 @@ def _build_scratch_csv(csv_path: Path, scratch_path: Path, limit: int) -> list[s
         header_line + "".join(captured_lines), encoding="utf-8"
     )
     return chosen_order
-
-
-def _detect_delimiter(csv_path: Path) -> str:
-    """Match the workspace ``detect_delimiter`` rule from
-    ``seers_harness.intake.request_preprocessor`` (no import to keep the
-    helper inert when ``data_100k.csv`` is absent)."""
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        header = f.readline()
-    counts = {delimiter: header.count(delimiter) for delimiter in ("#", ",", "\t", "|")}
-    best = max(counts, key=counts.get)
-    return best if counts[best] else ","
 
 
 def _default_nodes_factory() -> NodesFactory:
@@ -540,10 +523,9 @@ def _run_one_request(
         # Always restore the contextvar even on exception, then flush
         # whatever evidence was captured before the failure scene.
         try:
-            from seers_harness.validation.recording_provider import (
-                _current_node_id as _cv,
-            )
-            _cv.reset(token)
+            from seers_harness.validation.recording_provider import reset_current_node_id
+
+            reset_current_node_id(token)
         except Exception:
             pass
         # Flush per-node evidence (messages.jsonl / tool_calls.jsonl /
