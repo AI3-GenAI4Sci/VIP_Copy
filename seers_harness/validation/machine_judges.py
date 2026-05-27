@@ -90,6 +90,8 @@ def judge_val02(artifact: dict[str, Any] | None) -> tuple[bool, str]:
     for index, item in enumerate(covers):
         if item is None:
             return False, f"covers_product_ids[{index}] is null"
+        if isinstance(item, bool):
+            return False, f"covers_product_ids[{index}] is bool"
         if isinstance(item, str) and item == "":
             return False, f"covers_product_ids[{index}] is empty string"
         if not isinstance(item, (int, str)):
