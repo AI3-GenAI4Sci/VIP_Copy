@@ -1202,6 +1202,8 @@ python -m seers_harness.validation.runner --env-file .env.local
 
 总计:13 个原子 commit + 1 个审计步骤,符合 GSD 原子 commit 规范。
 
+> **Wave 标号说明(advisory,plan-checker ISSUE-02 应对):** 本 phase 的 plan wave 字段是 *advisory grouping*(逻辑分组),不严格遵循"wave = max(深度依赖)+1"的并行执行模型。原因:phase 8 是 13 个串行 commit(每个 plan 单独 commit + 必要时 cherry-pick),不存在 wave 内并行执行的实际场景。`depends_on` 链已经表达完整序关系。Plan 06 标 wave 3 但 dep 是 wave 3 的 plan 05 —— 表示 "06 紧跟 05,语义上属于同一组(F 接线 + IN-01 token cost)";同理 wave 6 (09/10/11) 表示"trio of touch-new-wiring 收尾",顺序串行 (09→10→11) 由 depends_on 锁定。Execute-phase 工作流读 depends_on 串行执行,wave 字段仅用于 ROADMAP annotation 的可读性分组。
+
 ### 7.3 风险缓解
 
 - **大 commit 风险(F):** F 接线是单 commit 中最大的改动。Planner 应在 F 的 PLAN 中拆分 task 但保持单 commit —— 接线 + 单测在同一个 commit。如果需要拆,拆为"(F-1) `_distill_after_stage1` + `_build_trajectory_payload`","(F-2) `_run_one_request` 接线 trial loop + `_patch_from_portfolio_row`","(F-3) `_run_stage` 调用点更新 + run() 装配"三个 commit。这三者互相支撑,无 IN-01 token cost 接入会让 M4/M5 后续验证缺数据,**推荐保持 F 单 commit + IN-01 + M1-M5 紧随**。

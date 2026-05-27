@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T03:45:00.000Z"
+last_updated: "2026-05-27T06:33:23.238Z"
 progress:
   total_phases: 8
-  completed_phases: 6
-  total_plans: 22
-  completed_plans: 21
-  percent: 84
-last_gate_trip: 07-06/Task2 — PARTIAL retracted 2026-05-27; phase 7 reopens until full Stage 1+2+3 real-LLM run on post-phase-8 code lands, case_analysis F1..F4 judged excellent, and evolution `trials[]` observed non-empty. 7 phase-7 WR/IN items + evolution wiring + 5 real-LLM hardening items batched into new phase 8 (`08-CHARTER.md`)
+  completed_phases: 3
+  total_plans: 29
+  completed_plans: 20
+  percent: 38
 ---
 
 # Project State
@@ -124,20 +123,29 @@ Phase 7 is reopened but BLOCKED on phase 8. The 2026-05-26 real-LLM batch (`test
 **Next-action sequence (resume here):**
 
 ```bash
+
 # 1. Read the phase-8 charter — three groups (A-E hardening, F wiring, G WR/IN debt)
+
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md
 
 # 2. Open the WIP doc updates queued at pause-time:
+
 #    - 07-VERIFICATION.md frontmatter (trajectory root causes)
+
 #    - 07-UAT.md (current 15-test facts)
+
 #    - case_analysis_template.md (trajectory-level reading, NOT stats)
 
 # 3. Once phase-8 lands and pytest is green:
+
 #    - Re-launch real-LLM Stage 1+2+3 on the phase-8 commit using
+
 #      the runner's new --env-file flag (no shell ENV indirection)
+
 python -m seers_harness.validation.runner --env-file .env.local
 
 # 4. Then case_analysis.md F1..F4 + VAL-03/06 user verdicts (D-13/D-14)
+
 $EDITOR .planning/phases/07-real-llm-validation/case_analysis.md
 ```
 
