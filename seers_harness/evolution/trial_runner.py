@@ -35,7 +35,14 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from pydantic import BaseModel
+from pydantic import ValidationError as SchemaError
 
+from seers_harness.core.errors import (
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderTransientError,
+)
+from seers_harness.validation.exception_classifier import TrialFailure
 from seers_harness.workflow.dag_runner import NodeSpec, WorkflowRuntime
 
 
@@ -228,7 +235,13 @@ def run_request_trial(
                 for ev in runtime.trace
                 if ev.get("type") == "tool_loop_summary"
             )
-        except Exception as exc:
+        except (ProviderAuthError, ProviderRateLimitError, ProviderTransientError):
+            # D-19: provider errors must fail-fast at the runner level (provider_error
+            # route), not be swallowed as a trial failure. Re-raise so the host
+            # caller's classify(exc) routes to provider_error per
+            # seers_harness/validation/exception_classifier.py. (D8-G-WR-05)
+            raise
+        except (TrialFailure, AssertionError, SchemaError) as exc:
             outcome.success = False
             outcome.failure_category = type(exc).__name__
             if events is not None:
