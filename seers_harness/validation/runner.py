@@ -143,6 +143,10 @@ from seers_harness.evolution.trial_runner import (
     run_request_trial,
     sha256_of_text,
 )
+from seers_harness.intake.request_preprocessor import (
+    detect_delimiter,
+    preprocess_request_from_csv,
+)
 from seers_harness.workflow.dag_runner import WorkflowRuntime
 from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
@@ -280,11 +284,6 @@ def _default_scenario_loader(
     # in unit tests that inject a fake scenario_loader.
     import tempfile
     import csv as _csv
-
-    from seers_harness.intake.request_preprocessor import (
-        detect_delimiter,
-        preprocess_request_from_csv,
-    )
 
     csv_path = (
         Path(csv).resolve()

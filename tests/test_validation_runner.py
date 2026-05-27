@@ -824,3 +824,27 @@ def test_finally_writer_failure_does_not_mask_original_happy_path(
     captured = capsys.readouterr()
     assert "flush_evidence failed for" not in captured.err
     assert "write_evolution_snapshot failed for" not in captured.err
+
+
+def test_build_scratch_csv_resolves_detect_delimiter(tmp_path):
+    """Regression: detect_delimiter must be visible at module scope so
+    _build_scratch_csv (a sibling function) can call it.
+
+    Earlier shape imported request_preprocessor inside
+    _default_scenario_loader's body, which made detect_delimiter a
+    function-local in the loader but invisible to _build_scratch_csv —
+    the runner crashed at cold-launch with NameError before the first
+    DeepSeek request was issued.
+    """
+    csv_path = tmp_path / "tiny.csv"
+    csv_path.write_text(
+        "request_id,col1\nr1,a\nr2,b\nr3,c\n",
+        encoding="utf-8",
+    )
+    scratch_path = tmp_path / "scratch.csv"
+
+    chosen = runner._build_scratch_csv(csv_path, scratch_path, limit=2)
+
+    assert chosen == ["r1", "r2"]
+    assert scratch_path.exists()
+
