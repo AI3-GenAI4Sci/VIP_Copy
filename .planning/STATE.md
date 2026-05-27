@@ -3,25 +3,26 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T01:00:00.000Z"
+last_updated: "2026-05-27T03:45:00.000Z"
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 6
   total_plans: 22
   completed_plans: 21
-  percent: 95
-last_gate_trip: 07-06/Task2 — PARTIAL acceptance retracted by user 2026-05-27; phase reopens until post-CR-01..04 real-LLM re-run completes Stage 1 + 20/20 Stage 2 + 20/20 Stage 3, case_analysis F1..F4 judged excellent, evolution reflow events observed, and WR/IN findings closed or scheduled
+  percent: 84
+last_gate_trip: 07-06/Task2 — PARTIAL retracted 2026-05-27; phase 7 reopens until full Stage 1+2+3 real-LLM run on post-phase-8 code lands, case_analysis F1..F4 judged excellent, and evolution `trials[]` observed non-empty. 7 phase-7 WR/IN items + evolution wiring + 5 real-LLM hardening items batched into new phase 8 (`08-CHARTER.md`)
 ---
 
 # Project State
 
 ## Current Position
 
-Phase: 07 (real-llm-validation) — EXECUTING (code-side ready, full real-LLM coverage pending). 4 Critical review fixes (CR-01..04) committed and pytest 251/251 holds, but the user has rescinded the prior PARTIAL acceptance of 07-06. The new bar: a fresh real-LLM run on the post-CR-01..04 code must complete Stage 1 + Stage 2 (20/20) + Stage 3 (20/20), `case_analysis.md` F1..F4 verdicts must be populated and judged excellent, the evolution mechanism must be observed firing on real runs (at least one non-empty `trials[]` in an `evolution_snapshot.json`), Stage 3 high-concurrency c=20 must actually execute on live DeepSeek, and the WR/IN advisory findings in 07-REVIEW.md must each be closed, explicitly waived, or scheduled to a follow-up phase.
+Phase: 07 (real-llm-validation) — REOPENED, BLOCKED ON PHASE 8. Code-side is ready and pytest 253/253 holds, but the 2026-05-26 real-LLM batch (`tests/smoke/.runs/20260526T183142Z/`) surfaced three operational failures that prevent a clean Stage 1+2+3 re-run: **(1) httpx ReadTimeout at 60s default — DeepSeek-v4-pro reasoning model TTFB exceeds 60s; (2) DeepSeek-side JSON truncation mid `tool_call.arguments` at char 940; (3) shell ENV stale-key drift — runner picked up rotated key.** None are runner defects against phase-7 charter; all three were diagnosed as real-LLM operational hardening. The user approved batching them with the runner ↔ evolution wiring + the 7 phase-7 WR/IN runner-debt items into a new phase 8 (`08-CHARTER.md`, three groups: A-E hardening, F wiring, G WR/IN debt).
 
-- Focus: real-LLM full re-run on post-CR-01..04 code, then case-reading + evolution observation.
-- Verified baseline: 251 workspace tests pass after CR-01..04 fixes (`pytest -q` returns `251 passed in 0.78s`). No skips, no new failures, no schema drift.
-- Code-review remediation: 4/4 Critical findings closed atomically; Warnings (WR-01..06) and Infos (IN-01..08) **still open** under the user's revised acceptance bar.
+- Focus: phase 8 — runner-touch sweep that covers A-G in a single coherent change, then re-launch real-LLM Stage 1+2+3 on the phase-8 code.
+- Verified baseline: 253 workspace tests pass after CR-01..05 + 7 fix-now WR/IN commits (`pytest -q` green throughout 2026-05-27). No skips, no schema drift.
+- Code-review remediation: 4/4 Critical (CR-01..04) closed; CR-05 (parse-retry) closed `fc25187`; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
+- 2026-05-26 trajectory analysis confirmed `grep -rn "max_tokens"` returns 0 hits in source (D-06 honored) and max observed `completion_tokens` was 7019 — well under any cap. The truncation was DeepSeek-side stream cutoff, not a local budget.
 
 ## Completed Work
 
@@ -33,7 +34,8 @@ Phase: 07 (real-llm-validation) — EXECUTING (code-side ready, full real-LLM co
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (in progress — code-side ready, real-LLM coverage pending) | 6 plans delivered | `07-01-SUMMARY.md` (evolution observability hooks), `07-02-SUMMARY.md` (evidence capture layer — RecordingProvider + flush_evidence), `07-03-SUMMARY.md` (batch index writers — machine_judges + index_writer + batch_summary_writer), `07-04-SUMMARY.md` (stage runner — exception_classifier + runner CLI), `07-05-SUMMARY.md` (case-analysis template), `07-06-SUMMARY.md` PARTIAL (pre-CR run only — under user's revised bar, requires a fresh post-CR-01..04 re-run); `07-REVIEW.md` 4 Critical findings remediated atomically: CR-01 c2386a7, CR-02 609020d, CR-03 9810f85, CR-04 2cd75a0; `07-VERIFICATION.md` status `gaps_found` after PARTIAL acceptance retraction (2026-05-27) |
+| 7. Real-LLM Validation (REOPENED — blocked on phase 8) | 6 plans delivered + 11 fix-now commits (CR-01..05 + 7 WR/IN) | `07-01..06-SUMMARY.md`; `07-REVIEW.md` 4 Critical closed (`c2386a7`, `609020d`, `9810f85`, `2cd75a0`); CR-05 closed `fc25187`; 7 WR/IN closed-now per `07-WRIN-TRIAGE.md`; 7 WR/IN scheduled to phase 8; `07-VERIFICATION.md` status `gaps_found` after 2026-05-26 real-LLM batch surfaced 3 operational root causes (timeout/truncation/stale-env) |
+| 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening (STUB) | charter only | `08-CHARTER.md` — three groups: A-E phase-7 hardening (timeout 60→180s, transient retry, CR-05 audit, --env-file, failure_class), F evolution wiring, G 7 WR/IN runner-debt |
 
 ## Active Watchlist
 
@@ -117,24 +119,31 @@ Phase: 07 (real-llm-validation) — EXECUTING (code-side ready, full real-LLM co
 
 ## Resume Instruction
 
-Phase 7 reopened on 2026-05-27 after the user rescinded PARTIAL acceptance of 07-06. The next pass must run a full real-LLM re-validation on the post-CR-01..04 code:
+Phase 7 is reopened but BLOCKED on phase 8. The 2026-05-26 real-LLM batch (`tests/smoke/.runs/20260526T183142Z/`) surfaced three operational root causes that prevent a clean Stage 1+2+3 re-run on the current code. Phase 8 batches their fix with the runner ↔ evolution wiring and the 7 phase-7 WR/IN runner-debt items. Re-launching real-LLM on the current code would just hit the same failures.
+
+**Next-action sequence (resume here):**
 
 ```bash
-# 1. Confirm DEEPSEEK_API_KEY is set (and the key is valid — prior run hit a 401 once)
-[ -n "${DEEPSEEK_API_KEY:-}" ] || echo "ERROR: export DEEPSEEK_API_KEY first"
+# 1. Read the phase-8 charter — three groups (A-E hardening, F wiring, G WR/IN debt)
+$EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md
 
-# 2. Sanity: code is on commit 0e7d476 or later (CR-01..04 + tracking landed)
-git log --oneline -5
+# 2. Open the WIP doc updates queued at pause-time:
+#    - 07-VERIFICATION.md frontmatter (trajectory root causes)
+#    - 07-UAT.md (current 15-test facts)
+#    - case_analysis_template.md (trajectory-level reading, NOT stats)
 
-# 3. Full three-stage real-LLM run (~45-60 min budget; Opus reasoning ~5min/node)
-python -m seers_harness.validation.runner
+# 3. Once phase-8 lands and pytest is green:
+#    - Re-launch real-LLM Stage 1+2+3 on the phase-8 commit using
+#      the runner's new --env-file flag (no shell ENV indirection)
+python -m seers_harness.validation.runner --env-file .env.local
 
-# 4. After the run lands evidence under tests/smoke/.runs/<ts>/, populate case-reading
+# 4. Then case_analysis.md F1..F4 + VAL-03/06 user verdicts (D-13/D-14)
 $EDITOR .planning/phases/07-real-llm-validation/case_analysis.md
 ```
 
-The next execute-phase invocation should drive: a fresh real-LLM run, case_analysis F1..F4 population, evolution-mechanism observation, Stage 3 c=20 confirmation, and WR/IN triage. See the prompt the user prepared for the new window for the full acceptance bar.
+The next execute-phase invocation should drive phase 8 (charter is the input). Phase 7 acceptance gate stays open until: (a) Stage 1+2+3 lands clean on phase-8 code; (b) `evolution_snapshot.json` carries non-empty `trials[]`; (c) case_analysis F1..F4 are user-judged excellent; (d) `07-WRIN-TRIAGE.md` 7 scheduled items move to phase-8 commit references.
 
-Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION.md` (status `gaps_found`, override_retracted_at recorded in frontmatter).
+Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION.md` (status `gaps_found`).
 Plan summaries: `workspace/.planning/phases/07-real-llm-validation/07-0{1..6}-SUMMARY.md`.
-Code-review: `workspace/.planning/phases/07-real-llm-validation/07-REVIEW.md` — Critical CR-01..04 closed; WR-01..06 + IN-01..08 still open and in scope under the revised acceptance bar.
+Code-review: `workspace/.planning/phases/07-real-llm-validation/07-REVIEW.md` — Critical CR-01..05 closed; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
+Phase 8 charter: `workspace/.planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md`.

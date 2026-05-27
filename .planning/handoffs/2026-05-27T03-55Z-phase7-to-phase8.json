@@ -1,0 +1,90 @@
+{
+  "handoff_id": "2026-05-27T03-55Z-phase7-to-phase8",
+  "created_at": "2026-05-27T03:55:00Z",
+  "session_summary": "Phase 7 acceptance retracted (2026-05-27T00:00Z); root causes for the 2026-05-26 real-LLM batch (20260526T183142Z) traced to three operational issues (60s httpx ReadTimeout, DeepSeek-side JSON truncation at char 940, shell ENV stale-key drift). NOT max_tokens — D-06 honored, max completion_tokens observed = 7019. User approved batching the fixes + 7 phase-7 WR/IN runner-debt items + runner ↔ evolution wiring into a new phase 8.",
+  "current_phase": "07-real-llm-validation",
+  "current_status": "reopened, BLOCKED on phase 8",
+  "next_phase": "08-evolution-wiring-and-runner-debt",
+  "next_phase_status": "stub — charter written 2026-05-27T03:40Z covering Groups A-G",
+  "resume_command_suggestion": "Read .planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md, then run /gsd-plan-phase 8 (or /gsd-execute-phase 8 if a plan already exists).",
+  "what_is_done_in_this_session": [
+    "Killed runner PID 98270 (D-02 stage 2 fail-fast on RC-01 ReadTimeout)",
+    "Trajectory-level root-cause investigation: read all usage.json + runner-*.log files in 20260526T183142Z; confirmed via grep that source has 0 max_tokens settings (D-06 honored)",
+    "11 fix-now commits already landed pre-session: CR-01..04 (c2386a7/609020d/9810f85/2cd75a0), CR-05 (fc25187), 7 WR/IN (CR-04 helper aa49f06, WR-06 f5893e3, IN-02 242e7a2, IN-03 9e57edf, IN-04 8aec0e6, IN-05 docs 2400667, IN-06 ff68300, IN-07 715d290). pytest 253/253 throughout.",
+    "Updated 07-WRIN-TRIAGE.md to closed (7 fixed-now, 7 scheduled to phase 8, 0 waived, 0 TBD).",
+    "Created/expanded 08-CHARTER.md with three groups: A-E phase-7 hardening, F evolution wiring, G 7 WR/IN runner-debt.",
+    "Updated .planning/STATE.md frontmatter (phase 8 added; phase 7 marked BLOCKED on phase 8).",
+    "Updated 07-VERIFICATION.md frontmatter with remediation_required block (RC-01/02/03 + exit_criteria).",
+    "Updated 07-UAT.md with current 15-test facts (10 pass / 1 partial / 4 blocked on phase 8).",
+    "Created case_analysis_template.md (trajectory-level reading guide, NOT stats counting — addresses user's 2026-05-27 correction)."
+  ],
+  "what_is_intentionally_NOT_done": [
+    "No runner.py modifications — preserved the aa49f06 baseline so phase 8 can land all runner-touch changes in a single coherent sweep.",
+    "No real-LLM re-launch — would just hit the same RC-01/02/03 failures without phase 8 fixes.",
+    "No case_analysis.md user verdicts — D-13/D-14 is user-only; template ready for the user post-phase-8.",
+    "Pre-existing SKILL.md edits in workflow-skills/current/{discover-personalization-factors, generate-copy-candidates, personalized-copy-rubric-judge}/SKILL.md left as-is — not part of this session's work.",
+    ".planning/config.json, .planning/phases/07-real-llm-validation/.run-logs/, .claude/ left untracked — local ephemeral, not for commit."
+  ],
+  "root_causes_for_phase_8_to_address": {
+    "RC-01_timeout": {
+      "symptom": "httpx.ReadTimeout → openai.APITimeoutError at 60s default",
+      "evidence": "tests/smoke/.runs/20260526T183142Z/runner-20260526T183141Z.log",
+      "ground_truth": "DeepSeek-v4-pro reasoning model TTFB exceeds 60s default in seers_harness/provider_runtime/openai_compatible.py:141. Observed reasoning_tokens=2644 — provider was still streaming reasoning when client hung up.",
+      "phase_8_fix": "Group 1 item A — DEEPSEEK_TIMEOUT_SECONDS default 60 → 180"
+    },
+    "RC-02_truncation": {
+      "symptom": "JSONDecodeError mid tool_call.arguments.evidence_refs: at char 940",
+      "evidence": "tests/smoke/.runs/20260526T183142Z/runner-20260526T174639Z.log",
+      "ground_truth": "DeepSeek-side stream truncation — server closed before completing JSON. CR-05 (fc25187) already added bounded parse-layer retry (DEEPSEEK_PARSE_MAX_RETRIES default 3).",
+      "phase_8_action": "Group 1 item C — AUDIT only (not a fix). Confirm on a fresh real-LLM batch that the retry actually absorbs this truncation class."
+    },
+    "RC-03_stale_env": {
+      "symptom": "HTTP 401 Unauthorized on first request of stage 1",
+      "evidence": "tests/smoke/.runs/20260526T174546Z/runner-*.log",
+      "ground_truth": "Shell DEEPSEEK_API_KEY ended in 92c7 (rotated); .env.local already held correct key ending ab06. Runner reads os.environ directly, so stale shell value won.",
+      "phase_8_fix": "Group 1 item D — add runner --env-file flag so the runner reads .env.local itself, no shell ENV indirection"
+    }
+  },
+  "phase_8_groups_summary": {
+    "Group_1_real_llm_hardening": ["A: timeout 60→180s", "B: ProviderTransientError request-level retry (2 attempts, 5s/15s backoff)", "C: CR-05 audit", "D: --env-file CLI flag", "E: failure_class column in index.json + batch_summary aggregation"],
+    "Group_2_evolution_wiring": ["F: _run_one_request calls assemble_portfolio + run_request_trial; seed one test delta at process start"],
+    "Group_3_wr_in_runner_debt": ["G: WR-01 fail-fast drain in-flight futures", "G: WR-02 finally-block best-effort logging", "G: WR-03 delete duplicate _detect_delimiter", "G: WR-04 callsite to public reset_current_node_id helper", "G: WR-05 narrow trial_runner except clause", "G: IN-01 plumb runtime.trace.usage into TrialOutcome.token_cost_observed", "G: IN-08 extract max_retries=3 to deepseek_provider_from_env"]
+  },
+  "phase_8_acceptance_bar": [
+    "Real-LLM Stage 1+2+3 completes end-to-end on a single phase-8 commit, no requests dropped on RC-01/02/03 root causes",
+    "evolution_snapshot.json carries at least one non-empty trials[] entry",
+    "index.json carries failure_class per row; batch_summary aggregates by class",
+    "pytest -q passes on the full runner-touch sweep",
+    "07-WRIN-TRIAGE.md: all 7 scheduled items move to phase-8 commit refs",
+    "Phase 8 VERIFICATION.md status passed"
+  ],
+  "files_modified_or_created_in_this_session": {
+    "modified": [
+      ".planning/STATE.md",
+      ".planning/phases/07-real-llm-validation/07-VERIFICATION.md",
+      ".planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md"
+    ],
+    "created": [
+      ".planning/phases/07-real-llm-validation/07-UAT.md",
+      ".planning/phases/07-real-llm-validation/case_analysis_template.md",
+      ".planning/handoffs/2026-05-27T03-55Z-phase7-to-phase8.json",
+      ".continue-here.md"
+    ]
+  },
+  "uncommitted_files_to_leave_alone": [
+    "workflow-skills/current/discover-personalization-factors/SKILL.md (pre-existing edit)",
+    "workflow-skills/current/generate-copy-candidates/SKILL.md (pre-existing edit)",
+    "workflow-skills/current/personalized-copy-rubric-judge/SKILL.md (pre-existing edit)",
+    ".claude/ (local agent settings — untracked, leave)",
+    ".planning/config.json (local config — untracked, leave)",
+    ".planning/phases/07-real-llm-validation/.run-logs/ (ephemeral run logs — untracked, leave)"
+  ],
+  "user_corrections_preserved": [
+    "2026-05-27 root-cause framing: NOT max_tokens; the three causes are RC-01 timeout, RC-02 DeepSeek-side truncation, RC-03 stale shell env. Source-grep confirms zero max_tokens in seers_harness/; max completion_tokens observed in failing batch = 7019.",
+    "2026-05-27 case analysis definition: trajectory-level reading of messages.jsonl / tool_calls.jsonl / artifact.json content per request, NOT stats counting from index.json columns. Captured in case_analysis_template.md."
+  ],
+  "thinking_setting_audit": {
+    "request": "User asked 2026-05-27 to set thinking to max for all subsequent experiments.",
+    "current_state": "Already max — seers_harness/provider_runtime/openai_compatible.py:68-71 sends reasoning_effort=\"max\" + extra_body={thinking: {type: enabled}} on every call. No change needed."
+  }
+}

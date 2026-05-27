@@ -13,6 +13,52 @@ override_retracted_reason: |
   The next real-LLM run must use the post-CR-01..04 code so the cause-chain
   classifier, secret redaction, path sanitisation, and CLI wiring are all
   exercised on live DeepSeek traffic.
+remediation_required:
+  source: tests/smoke/.runs/20260526T183142Z/runner-20260526T*.log
+  audited: 2026-05-27T03:30:00Z
+  audit_method: trajectory_read (NOT stats) — read runner logs + per-node
+    usage.json + tool_calls.jsonl content directly per user direction
+    "case分析是真的看输入输出具体内容进行轨迹级别的case分析".
+  not_root_cause:
+    - claim: "max_tokens or per-request budget caused truncation"
+      ruling: REJECTED — `grep -rn "max_tokens" seers_harness/` returns 0 hits
+        (D-06 honoured); max observed completion_tokens across the failing
+        batch = 7019, well below the v4-pro 8192 default; no `_PROVIDER_BUDGET`
+        path was hit by any failing request.
+  root_causes:
+    - id: RC-01
+      symptom: httpx.ReadTimeout → openai.APITimeoutError at 60s default
+      evidence_path: tests/smoke/.runs/20260526T183142Z/runner-20260526T183141Z.log
+      ground_truth: DeepSeek-v4-pro reasoning model TTFB exceeds the 60s
+        default in `openai_compatible.py:141` (`DEEPSEEK_TIMEOUT_SECONDS`).
+        Observed `reasoning_tokens=2644` on the timed-out request — the
+        provider was still streaming reasoning tokens when the client hung up.
+      fix_owner: phase-8 Group 1 item A (timeout default 60s → 180s)
+    - id: RC-02
+      symptom: JSONDecodeError mid `tool_call.arguments.evidence_refs:` at char 940
+      evidence_path: tests/smoke/.runs/20260526T183142Z/runner-20260526T174639Z.log
+      ground_truth: DeepSeek-side stream truncation — server closed before
+        completing the JSON object. CR-05 (commit `fc25187`) already added a
+        bounded parse-layer retry (`DEEPSEEK_PARSE_MAX_RETRIES` default 3).
+        Phase-8 item C is an audit, not a fix — confirm the retry actually
+        swallows this class of truncation on a fresh batch.
+      fix_owner: phase-8 Group 1 item C (CR-05 audit)
+    - id: RC-03
+      symptom: HTTP 401 Unauthorized on first request of stage 1
+      evidence_path: tests/smoke/.runs/20260526T174546Z/runner-*.log
+      ground_truth: shell ENV `DEEPSEEK_API_KEY` ended in `92c7` (rotated value);
+        `.env.local` already held the correct key ending in `ab06`. The runner
+        reads `os.environ` directly, so the stale shell value won. Operator
+        error, but a permanent fix is to have the runner read `.env.local`
+        itself via `--env-file`.
+      fix_owner: phase-8 Group 1 item D (`--env-file` flag)
+  exit_criteria:
+    - all three root causes addressed in a single phase-8 runner-touch sweep
+    - re-launch real-LLM Stage 1+2+3 on phase-8 commit with `--env-file .env.local`
+    - `evolution_snapshot.json` carries at least one non-empty `trials[]`
+    - `index.json` carries a `failure_class` column per row (phase-8 item E)
+    - `case_analysis.md` F1..F4 user-judged excellent
+    - `07-WRIN-TRIAGE.md` 7 scheduled items reference phase-8 commits
 roadmap_truths:
   - "20 real DeepSeek scenarios run through the stack with tool calls"
   - "Clean copy on real runs"
