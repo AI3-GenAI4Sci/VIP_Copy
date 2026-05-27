@@ -668,15 +668,39 @@ def _run_one_request(
             reset_current_node_id(token)
         except Exception:
             pass
+        # WR-02 (plan 08-10): best-effort wrap the two writer calls so a
+        # cleanup failure (disk full / permission denied) does NOT mask
+        # the original try-block exception (Python finally anti-pattern).
+        # Each writer is caught at ``Exception`` (NOT BaseException, so
+        # KeyboardInterrupt still escapes) and the cleanup exception is
+        # rendered via ``safe_exc`` — never via the full-stack printer
+        # which could leak ``Authorization: Bearer sk-...`` headers per
+        # T-08-10-01. ``request_id`` (not the full path) carries enough
+        # audit signal to root-cause via the stage_dir layout.
+        #
         # Flush per-node evidence (messages.jsonl / tool_calls.jsonl /
         # artifact.json / usage.json) under request_dir/evidence/.
         evidence_dir = request_dir / "evidence"
-        flush_evidence(request_log, evidence_dir)
+        try:
+            flush_evidence(request_log, evidence_dir)
+        except Exception as cleanup_exc:
+            print(
+                f"[runner] flush_evidence failed for {request_id}: "
+                f"{safe_exc(cleanup_exc)}",
+                file=sys.stderr,
+            )
         # Flush the per-request VAL-06 evolution snapshot (always —
         # an empty events list still produces an empty-shape snapshot
         # per 07-01's degradation rules; D-18 expects zero trials in
         # Stage 1 / early Stage 2 and the snapshot must still write).
-        write_evolution_snapshot(events, request_dir / "evolution_snapshot.json")
+        try:
+            write_evolution_snapshot(events, request_dir / "evolution_snapshot.json")
+        except Exception as cleanup_exc:
+            print(
+                f"[runner] write_evolution_snapshot failed for {request_id}: "
+                f"{safe_exc(cleanup_exc)}",
+                file=sys.stderr,
+            )
 
     return record
 

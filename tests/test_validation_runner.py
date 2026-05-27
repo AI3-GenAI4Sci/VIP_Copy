@@ -718,3 +718,109 @@ def test_stage3_fail_fast_drains_inflight_failure_with_class(monkeypatch, tmp_pa
     assert "secondary-transient-cause" in transient_records[0]["exception"]
     assert result.passed is False
 
+
+# ---------------------------------------------------------------------------
+# Plan 08-10 — D8-G-WR-02 finally best-effort wrapping (test 3 cases)
+# ---------------------------------------------------------------------------
+
+
+class _AuthFailingRuntime(_FakeRuntime):
+    """Runtime that raises ProviderAuthError inside ``run_request``.
+
+    Used to verify that finally-block cleanup failures do NOT mask the
+    original try-block exception (Python finally anti-pattern guard).
+    """
+
+    def run_request(self, *, scenario, nodes):
+        raise ProviderAuthError("primary-auth-cause-from-try-block")
+
+
+def _raise_perm_error(*args, **kwargs):
+    raise PermissionError("disk-full-or-permission-denied-cleanup-fault")
+
+
+def test_finally_writer_failure_does_not_mask_original_flush_evidence(
+    monkeypatch, tmp_path, capsys
+):
+    """Case A: try block raises ProviderAuthError; flush_evidence raises
+    PermissionError in finally. Original ProviderAuthError must propagate;
+    stderr must contain ``flush_evidence failed for {request_id}``."""
+    monkeypatch.setattr(runner, "WorkflowRuntime", _AuthFailingRuntime)
+    monkeypatch.setattr(runner, "flush_evidence", _raise_perm_error)
+    live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
+    request_dir = tmp_path / "req-flush-fail"
+
+    with pytest.raises(ProviderAuthError, match="primary-auth-cause-from-try-block"):
+        runner._run_one_request(
+            request_id="req-flush-fail-id",
+            scenario={"request_id": "req-flush-fail-id"},
+            nodes=[],
+            provider_factory=lambda: object(),
+            request_dir=request_dir,
+            events=[],
+            delta_portfolio=[],
+            live_skill_root=live_skill_root,
+        )
+
+    captured = capsys.readouterr()
+    assert "flush_evidence failed for req-flush-fail-id" in captured.err
+    assert "PermissionError" in captured.err
+    # Cleanup-exception message must be redacted via safe_exc, not raw stack.
+    # No traceback frames should be printed for the cleanup failure path.
+    assert 'File "' not in captured.err.split("flush_evidence failed for")[1].split("\n")[0]
+
+
+def test_finally_writer_failure_does_not_mask_original_write_snapshot(
+    monkeypatch, tmp_path, capsys
+):
+    """Case B: try block raises ProviderAuthError; write_evolution_snapshot
+    raises PermissionError in finally. flush_evidence succeeds. Original
+    ProviderAuthError must propagate; stderr must contain
+    ``write_evolution_snapshot failed for {request_id}``."""
+    monkeypatch.setattr(runner, "WorkflowRuntime", _AuthFailingRuntime)
+    monkeypatch.setattr(runner, "write_evolution_snapshot", _raise_perm_error)
+    live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
+    request_dir = tmp_path / "req-snapshot-fail"
+
+    with pytest.raises(ProviderAuthError, match="primary-auth-cause-from-try-block"):
+        runner._run_one_request(
+            request_id="req-snapshot-fail-id",
+            scenario={"request_id": "req-snapshot-fail-id"},
+            nodes=[],
+            provider_factory=lambda: object(),
+            request_dir=request_dir,
+            events=[],
+            delta_portfolio=[],
+            live_skill_root=live_skill_root,
+        )
+
+    captured = capsys.readouterr()
+    assert "write_evolution_snapshot failed for req-snapshot-fail-id" in captured.err
+    assert "PermissionError" in captured.err
+
+
+def test_finally_writer_failure_does_not_mask_original_happy_path(
+    monkeypatch, tmp_path, capsys
+):
+    """Case C (happy path): no cleanup failure → stderr contains NEITHER
+    ``flush_evidence failed for`` NOR ``write_evolution_snapshot failed for``.
+    Confirms the best-effort wrap is silent on the success path."""
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
+    request_dir = tmp_path / "req-happy"
+
+    record = runner._run_one_request(
+        request_id="req-happy-id",
+        scenario={"request_id": "req-happy-id"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        request_dir=request_dir,
+        events=[],
+        delta_portfolio=[],
+        live_skill_root=live_skill_root,
+    )
+
+    assert record["exception"] is None
+    captured = capsys.readouterr()
+    assert "flush_evidence failed for" not in captured.err
+    assert "write_evolution_snapshot failed for" not in captured.err
