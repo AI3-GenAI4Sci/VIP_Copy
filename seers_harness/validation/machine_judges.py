@@ -191,23 +191,31 @@ def extract_transferable_disposition_text(artifact: dict[str, Any] | None) -> st
 
 
 def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
-    """E4 column: token-set Jaccard between user_signal and disposition text.
+    """E4 column: codepoint-set Jaccard between user_signal and disposition text.
 
     Sort descending → highest overlap rises to the top (E4 navigates to
     the request whose disposition text most literally echoes the
     user-side signal — a classic "fake-transferable" smell per CONTEXT
     F1/F2/F3).
 
-    Tokenisation rule (locked by plan 07-03):
-        * lowercase
-        * split on whitespace (no stemming, no language-aware
-          segmentation — the index writer is intentionally
-          language-agnostic; the case-analysis pass reads the raw text)
-        * drop empty tokens
+    Tokenisation rule (IN-03 fix — was whitespace.split, which collapsed
+    all CJK requests to 0.0 because Chinese has no whitespace separators
+    so the entire string became one giant unsplittable token):
 
-    Returns 0.0 when either side is empty after tokenisation (a missing
-    user_signal or an empty disposition has no defined overlap; sinking
-    to 0.0 is the safe default for a sort-desc column).
+        * lowercase (case-insensitive overlap on Latin scripts)
+        * strip ASCII whitespace (so " a b " and "a  b" agree)
+        * iterate codepoints — Latin letters and CJK ideographs alike
+          enter the set as single-char tokens
+
+    Trade-off: English overlap is now char-level, not word-level. "the"
+    vs "they" share {t,h,e} so two Latin strings will tend to score
+    higher than under the previous word-level rule. E4 is a *sort-only*
+    column — absolute values are not load-bearing; only the descending
+    order matters for the case-reading workflow, and char-level Jaccard
+    preserves the relative order of "high-overlap echo" vs "low-overlap
+    distinct prose" for both English and CJK.
+
+    Returns 0.0 when either side is empty after tokenisation.
     """
     if not isinstance(artifact, dict):
         return 0.0
@@ -216,8 +224,8 @@ def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
     if not isinstance(user_signal, str) or not isinstance(disposition, str):
         return 0.0
 
-    left_tokens = {t for t in user_signal.lower().split() if t}
-    right_tokens = {t for t in disposition.lower().split() if t}
+    left_tokens = {ch for ch in user_signal.lower() if not ch.isspace()}
+    right_tokens = {ch for ch in disposition.lower() if not ch.isspace()}
     if not left_tokens or not right_tokens:
         return 0.0
 
