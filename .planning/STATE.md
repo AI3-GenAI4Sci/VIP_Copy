@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T06:33:23.238Z"
+last_updated: "2026-05-27T07:05:11.580Z"
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 29
-  completed_plans: 20
+  completed_plans: 21
   percent: 38
 ---
 
@@ -16,7 +16,8 @@ progress:
 
 ## Current Position
 
-Phase: 07 (real-llm-validation) — REOPENED, BLOCKED ON PHASE 8. Code-side is ready and pytest 253/253 holds, but the 2026-05-26 real-LLM batch (`tests/smoke/.runs/20260526T183142Z/`) surfaced three operational failures that prevent a clean Stage 1+2+3 re-run: **(1) httpx ReadTimeout at 60s default — DeepSeek-v4-pro reasoning model TTFB exceeds 60s; (2) DeepSeek-side JSON truncation mid `tool_call.arguments` at char 940; (3) shell ENV stale-key drift — runner picked up rotated key.** None are runner defects against phase-7 charter; all three were diagnosed as real-LLM operational hardening. The user approved batching them with the runner ↔ evolution wiring + the 7 phase-7 WR/IN runner-debt items into a new phase 8 (`08-CHARTER.md`, three groups: A-E hardening, F wiring, G WR/IN debt).
+Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING
+Plan: 2 of 13
 
 - Focus: phase 8 — runner-touch sweep that covers A-G in a single coherent change, then re-launch real-LLM Stage 1+2+3 on the phase-8 code.
 - Verified baseline: 253 workspace tests pass after CR-01..05 + 7 fix-now WR/IN commits (`pytest -q` green throughout 2026-05-27). No skips, no schema drift.
@@ -155,3 +156,9 @@ Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION
 Plan summaries: `workspace/.planning/phases/07-real-llm-validation/07-0{1..6}-SUMMARY.md`.
 Code-review: `workspace/.planning/phases/07-real-llm-validation/07-REVIEW.md` — Critical CR-01..05 closed; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
 Phase 8 charter: `workspace/.planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md`.
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Notes |
+|-------|------|----------|-------|
+| Phase 08 P01 | 18min | 1 tasks | 2 files |
