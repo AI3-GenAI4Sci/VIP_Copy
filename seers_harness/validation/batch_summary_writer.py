@@ -94,10 +94,18 @@ def write_batch_summary(
     queue: list[str] = []
     seen_in_queue: set[str] = set()
 
-    for row in rows:
+    for index, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
-        node_id = str(row.get("node_id") or "")
+        # IN-06 — fall back to a positional sentinel when the row's
+        # node_id is missing/empty so fail_lists and manual_review_queue
+        # never carry a bare "" entry. The auditor sees exactly which
+        # row index is unidentified instead of a silently-dedup'd blank.
+        raw_node_id = row.get("node_id")
+        if isinstance(raw_node_id, str) and raw_node_id:
+            node_id = raw_node_id
+        else:
+            node_id = f"<missing-node-id-row-{index}>"
 
         # Totals + fail_lists. Counted as pass only when the row carries
         # ``True``; ``None`` and ``False`` are NOT counted as pass. Only
@@ -133,7 +141,7 @@ def write_batch_summary(
         if row.get("trial_selected_delta_id"):
             needs_review = True
 
-        if needs_review and node_id and node_id not in seen_in_queue:
+        if needs_review and node_id not in seen_in_queue:
             queue.append(node_id)
             seen_in_queue.add(node_id)
 
