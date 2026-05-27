@@ -58,8 +58,11 @@ from pathlib import Path
 from typing import Any
 
 # D-16 reading-scope cap — keep the manual review queue between 20 and 30
-# entries; overflow is surfaced via a sentinel marker, not dropped.
-_MANUAL_REVIEW_QUEUE_CAP = 30
+# entries TOTAL (queue rows + truncation sentinel together must fit in
+# 30). IN-07: previously the cap was 30 + sentinel = 31, exceeding the
+# documented 20-30 reading scope by one. Allow at most 29 real rows so
+# that with the sentinel appended the published queue is exactly 30.
+_MANUAL_REVIEW_QUEUE_CAP = 29
 
 
 def write_batch_summary(
