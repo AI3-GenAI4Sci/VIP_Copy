@@ -227,13 +227,17 @@ def run_request_trial(
             outcome.success = False
             outcome.failure_category = type(exc).__name__
             if events is not None:
+                # WR-06 (CR-03 mirror) — redact at the emitter so even
+                # in-memory consumers of ``events`` (not just the on-disk
+                # snapshot reducer) see a safe message.
+                from seers_harness.validation._secrets import safe_exc_message
                 events.append(
                     {
                         "type": "trial_failed",
                         "trial_id": request_id,
                         "delta_id": trial_delta_id_for_event,
                         "exception_class": type(exc).__name__,
-                        "exception_message": str(exc),
+                        "exception_message": safe_exc_message(exc),
                     }
                 )
 
