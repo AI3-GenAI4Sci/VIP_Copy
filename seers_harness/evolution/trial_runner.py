@@ -223,6 +223,11 @@ def run_request_trial(
                 for ev in runtime.trace
                 if ev.get("type") == "tool_loop_summary"
             )
+            outcome.token_cost_observed = sum(
+                int((ev.get("usage") or {}).get("total_tokens") or 0)
+                for ev in runtime.trace
+                if ev.get("type") == "tool_loop_summary"
+            )
         except Exception as exc:
             outcome.success = False
             outcome.failure_category = type(exc).__name__

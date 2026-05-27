@@ -5,7 +5,7 @@ collapses to one ``run_skill_via_tools(...)`` call followed by
 ``model_type.model_validate(result.artifact)``. Each node attempt is a single
 tool-loop invocation plus pydantic validation; the trace event is
 ``tool_loop_summary`` with fields {turns_used, tool_calls_made,
-last_reasoning_content}. See RESEARCH §4 + §8 for the table and pitfalls.
+last_reasoning_content, usage}. See RESEARCH §4 + §8 for the table and pitfalls.
 """
 
 from __future__ import annotations
@@ -94,6 +94,7 @@ class WorkflowRuntime:
                         "turns_used": result.turns_used,
                         "tool_calls_made": result.tool_calls_made,
                         "last_reasoning_content": result.last_reasoning_content,
+                        "usage": result.usage,
                     }
                 )
                 try:

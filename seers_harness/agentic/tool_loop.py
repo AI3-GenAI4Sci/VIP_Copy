@@ -10,7 +10,7 @@ sets ``state['final_artifact']``. Echoes ``reasoning_content`` + the SDK-shape
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from seers_harness.core.errors import ProviderTransientError, ToolValidationError
@@ -26,6 +26,7 @@ class ToolLoopResult:
     turns_used: int
     tool_calls_made: int
     last_reasoning_content: str | None
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 def run_skill_via_tools(
@@ -48,6 +49,7 @@ def run_skill_via_tools(
     # (record_factor / record_candidate / judge_candidate all read it).
     state: dict[str, Any] = {"payload": payload}
     tool_calls_made = 0
+    usage: dict[str, Any] = {}
 
     for turn in range(max_tool_calls):
         for attempt in range(max_transient_retries_per_turn + 1):
@@ -58,6 +60,7 @@ def run_skill_via_tools(
                     messages=messages,
                     tools=tools_spec,
                 )
+                _merge_usage(usage, getattr(result, "usage", {}) or {})
                 break
             except ProviderTransientError:
                 if attempt == max_transient_retries_per_turn:
@@ -88,11 +91,12 @@ def run_skill_via_tools(
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": msg})
 
         if "final_artifact" in state:
-            return ToolLoopResult(
-                artifact=state["final_artifact"],
-                turns_used=turn + 1,
-                tool_calls_made=tool_calls_made,
-                last_reasoning_content=result.reasoning_content,
-            )
+            return ToolLoopResult(state["final_artifact"], turn + 1, tool_calls_made, result.reasoning_content, usage=dict(usage))
 
     raise ToolLoopError(f"exceeded max_tool_calls={max_tool_calls}")
+
+
+def _merge_usage(total: dict[str, Any], usage: Mapping[str, Any]) -> None:
+    for key, value in usage.items():
+        if value is not None:
+            total[key] = total.get(key, 0) + value if isinstance(value, int | float) and not isinstance(value, bool) else value
