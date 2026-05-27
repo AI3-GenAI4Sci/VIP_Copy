@@ -26,6 +26,7 @@ from seers_harness.core.errors import (
 from seers_harness.provider_runtime.base import ProviderResult
 
 DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
+_DEFAULT_TIMEOUT_SECONDS = 180
 _DEFAULT_PARSE_MAX_RETRIES = 3
 _TYPED_PROVIDER_ERRORS: dict[str, type[Exception]] = {
     "rate_limit": ProviderRateLimitError,
@@ -128,7 +129,7 @@ def deepseek_runtime_facts() -> dict[str, Any]:
     sample = type("_SampleRateLimit", (Exception,), {})("HTTP 429 rate limit exceeded")
     return {
         "default_model": "deepseek-v4-pro", "default_base_url": DEEPSEEK_BETA_BASE_URL,
-        "default_timeout_seconds": 60, "default_sdk_max_retries": 0,
+        "default_timeout_seconds": _DEFAULT_TIMEOUT_SECONDS, "default_sdk_max_retries": 0,
         "thinking_enabled": True, "reasoning_effort": "max", "tool_choice": "auto",
         "rate_limit_exception_category": str(classify_exception(sample)["category"]),
     }
@@ -138,11 +139,10 @@ def deepseek_provider_from_env(*, model: str | None = None, timeout_seconds: flo
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is required for DeepSeek provider")
-    timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "60"))
+    timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT_SECONDS)))
     retries = max_retries if max_retries is not None else int(os.environ.get("DEEPSEEK_SDK_MAX_RETRIES", "0"))
     return OpenAICompatibleProvider(
         model=model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         api_key=api_key, base_url=os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BETA_BASE_URL),
         timeout_seconds=timeout, max_retries=retries,
     )
-
