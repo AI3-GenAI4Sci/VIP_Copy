@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
 from pydantic import ValidationError
@@ -521,3 +522,199 @@ def test_run_drives_distill_only_after_stage1_passes(monkeypatch, tmp_path):
         provider_factory=lambda: object(),
     ) == 0
     assert distill_calls == [1]
+
+
+def test_stage3_fail_fast_drains_inflight(monkeypatch, tmp_path):
+    """D8-G-WR-01: Stage 3 fail-fast must drain in-flight futures.
+
+    Setup: c=20 / n=20 with a scripted ``_run_one_request`` substitute
+    such that ONE request (rid-04) raises ``ProviderAuthError`` as soon
+    as it starts (triggering fail-fast in the as_completed loop of the
+    main thread). The other 19 requests block on a ``threading.Event``.
+    The main thread, after capturing the auth failure, drains the
+    remaining in-flight futures: it cancels them (best-effort), then
+    walks ``as_completed(remaining)`` waiting for each to finish.
+
+    The test releases the event AFTER fail-fast is observed so the
+    in-flight workers complete naturally. Cancelled (= never started)
+    futures must NOT contribute records; in-flight completed futures
+    DO contribute records. The drain path must populate
+    ``failure_class`` per plan 08-03 and must NOT overwrite the
+    original ``failure_exc`` (the auth error stays the canonical
+    cause).
+    """
+    # Stage config narrows to a small, deterministic n.  Use n=6,
+    # concurrency=6 — enough to assert the multi-future drain path
+    # without slowing the test suite.  The bug surfaces identically at
+    # any n>=2 (one fail-fast trigger plus >=1 drained future).
+    monkeypatch.setitem(runner._STAGE_CONFIG, 3, (6, 6))
+
+    fail_fast_observed = threading.Event()
+    release_inflight = threading.Event()
+
+    def scripted_run_one_request(*, request_id, **_kwargs):
+        # rid-04 is the fail-fast trigger.  It raises immediately on
+        # entry — no waiting for the release event.  This guarantees
+        # the as_completed loop in the main thread sees the auth
+        # exception while the other 5 futures are still blocked.
+        if request_id == "rid-04":
+            raise ProviderAuthError("scripted-auth-failure")
+        # Other rids: block until the test releases them.  Once the
+        # main thread observes fail-fast and enters the drain loop,
+        # the test releases the event so each blocked future returns
+        # a normal success record.  These records MUST be appended
+        # by the drain branch.
+        if not release_inflight.wait(timeout=10.0):
+            raise RuntimeError(f"release_inflight not set in {request_id}")
+        return {
+            "node_id": runner._safe_request_dirname(request_id),
+            "request_id": request_id,
+            "artifact": None,
+            "reflow_triggered": False,
+            "trial_selected_delta_id": None,
+            "exception": None,
+            "failure_class": "ok",
+        }
+
+    monkeypatch.setattr(runner, "_run_one_request", scripted_run_one_request)
+
+    # Spawn a watcher thread that releases in-flight futures shortly
+    # after the as_completed loop starts.  The fail-fast trigger
+    # (rid-04) raises as soon as it begins, so the main thread will
+    # observe it within milliseconds.  We give it 200 ms then release.
+    def _release_after_failfast():
+        # Wait until the main thread has had a chance to observe the
+        # auth exception.  ThreadPoolExecutor.submit returns futures
+        # in the same order, and rid-04 raises immediately, so a
+        # short sleep is sufficient.
+        import time
+
+        time.sleep(0.2)
+        fail_fast_observed.set()
+        release_inflight.set()
+
+    releaser = threading.Thread(target=_release_after_failfast, daemon=True)
+    releaser.start()
+
+    request_ids = [f"rid-{i:02d}" for i in range(6)]
+    result = runner._run_stage(
+        stage=3,
+        request_ids=request_ids,
+        scenario_loader=lambda rid: {"request_id": rid},
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=[],
+        live_skill_root=tmp_path / "workflow-skills",
+    )
+    releaser.join(timeout=2.0)
+
+    # Acceptance: every submitted future contributes one record.
+    # The fail-fast trigger contributes its auth failure record,
+    # and the 5 drained in-flight futures contribute their success
+    # records.  Cancelled (= never started) futures contribute none
+    # — but with 6 workers and 6 submitted requests every future
+    # gets a worker so cancellation is a no-op here.
+    assert len(result.records) == 6, (
+        f"expected 6 records (1 fail-fast + 5 drained), got {len(result.records)}"
+    )
+
+    # Exactly one auth failure record exists, and it carries
+    # failure_class == "auth" per plan 08-03's 7-enum router.
+    auth_records = [r for r in result.records if r.get("failure_class") == "auth"]
+    assert len(auth_records) == 1, "expected exactly one auth fail-fast record"
+    assert auth_records[0]["request_id"] == "rid-04"
+    assert auth_records[0]["exception"] is not None
+    assert "scripted-auth-failure" in auth_records[0]["exception"]
+
+    # The 5 drained in-flight futures land as success records (the
+    # scripted body returned a normal dict once released).  None of
+    # them overwrites the auth record's failure_class.
+    success_records = [r for r in result.records if r.get("failure_class") == "ok"]
+    assert len(success_records) == 5, (
+        f"expected 5 drained-success records, got {len(success_records)}"
+    )
+
+    # Stage failed (failure_exc was set on auth path); records-vs-n
+    # parity holds (= the WR-01 disk-vs-index fix).
+    assert result.passed is False
+
+
+def test_stage3_fail_fast_drains_inflight_failure_with_class(monkeypatch, tmp_path):
+    """A drained in-flight future that raises non-auth must still get
+    its own ``failure_class`` per plan 08-03 routing — and must NOT
+    overwrite the original auth fail-fast cause on the runner level.
+
+    This complements the success-drain test above: it proves the
+    drain branch's ``except BaseException as drain_exc`` arm handles
+    non-cancellation exceptions correctly and routes them through
+    ``failure_class(drain_exc)`` (not through the D-19 ``classify``
+    surface — drain failures never become ``trial_failure``).
+    """
+    from seers_harness.core.errors import ProviderTransientError
+
+    monkeypatch.setitem(runner._STAGE_CONFIG, 3, (3, 3))
+
+    release = threading.Event()
+
+    def scripted(*, request_id, **_kwargs):
+        if request_id == "rid-00":
+            # Fail-fast trigger: auth.
+            raise ProviderAuthError("primary-auth-cause")
+        if not release.wait(timeout=10.0):
+            raise RuntimeError(f"release not set in {request_id}")
+        if request_id == "rid-01":
+            # Drained-and-then-fails: transient.
+            raise ProviderTransientError("secondary-transient-cause")
+        return {
+            "node_id": runner._safe_request_dirname(request_id),
+            "request_id": request_id,
+            "artifact": None,
+            "reflow_triggered": False,
+            "trial_selected_delta_id": None,
+            "exception": None,
+            "failure_class": "ok",
+        }
+
+    monkeypatch.setattr(runner, "_run_one_request", scripted)
+
+    def _release_after():
+        import time
+
+        time.sleep(0.2)
+        release.set()
+
+    releaser = threading.Thread(target=_release_after, daemon=True)
+    releaser.start()
+
+    result = runner._run_stage(
+        stage=3,
+        request_ids=["rid-00", "rid-01", "rid-02"],
+        scenario_loader=lambda rid: {"request_id": rid},
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=[],
+        live_skill_root=tmp_path / "workflow-skills",
+    )
+    releaser.join(timeout=2.0)
+
+    # 3 records total: auth fail-fast, transient drained-failure,
+    # one success drained.
+    assert len(result.records) == 3
+    classes = sorted(r.get("failure_class") for r in result.records)
+    assert classes == ["auth", "ok", "transient"]
+
+    # The transient drained-failure carries failure_class="transient"
+    # per plan 08-03 router (not "trial_failure"; D-19 routes are
+    # forbidden in drain).
+    transient_records = [
+        r for r in result.records if r.get("failure_class") == "transient"
+    ]
+    assert len(transient_records) == 1
+    assert transient_records[0]["request_id"] == "rid-01"
+    assert "secondary-transient-cause" in transient_records[0]["exception"]
+    assert result.passed is False
+

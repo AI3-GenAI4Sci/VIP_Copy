@@ -830,10 +830,45 @@ def _run_stage(
                         file=sys.stderr,
                     )
                     traceback.print_exc(file=sys.stderr)
-                    # Cancel the remaining futures (best-effort) and
-                    # break — partial artifacts on disk are kept.
-                    for other in future_to_rid:
-                        other.cancel()
+                    # WR-01: drain in-flight futures so disk artifacts
+                    # and index.json agree on which requests ran.
+                    # `future.cancel()` only cancels not-yet-started
+                    # futures; already-running workers continue. We
+                    # cancel the not-started ones, then wait for the
+                    # in-flight ones to finish (success OR failure)
+                    # and collect their records. `failure_exc` is NOT
+                    # overwritten — the original auth/transient/etc.
+                    # cause stays the canonical fail-fast trigger;
+                    # drained failures get their own row routed
+                    # through plan 08-03's 7-enum failure_class.
+                    remaining = [f for f in future_to_rid if not f.done()]
+                    for f in remaining:
+                        f.cancel()
+                    for f in as_completed(remaining):
+                        rid_drain = future_to_rid[f]
+                        if f.cancelled():
+                            # Never-started future: no _run_one_request
+                            # body ran, so its `finally` block never
+                            # executed, so there is no disk artifact
+                            # for this request. Do not synthesise an
+                            # index row for it (D-02 partial-on-disk
+                            # rule: rows match disk).
+                            continue
+                        try:
+                            record = f.result()
+                            records.append(record)
+                        except BaseException as drain_exc:
+                            records.append(
+                                {
+                                    "node_id": _safe_request_dirname(rid_drain),
+                                    "request_id": rid_drain,
+                                    "artifact": None,
+                                    "reflow_triggered": False,
+                                    "trial_selected_delta_id": None,
+                                    "exception": safe_exc(drain_exc),
+                                    "failure_class": failure_class(drain_exc),
+                                }
+                            )
                     break
 
     finished_at = _utc_now_iso()
