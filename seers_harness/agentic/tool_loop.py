@@ -10,10 +10,16 @@ sets ``state['final_artifact']``. Echoes ``reasoning_content`` + the SDK-shape
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from seers_harness.core.errors import ProviderTransientError, ToolValidationError
+
+
+_TRANSIENT_BACKOFF_SECONDS: tuple[float, ...] = (0.0, 5.0, 15.0)
+"""D8-B backoff (charter Q4 + D8-B): attempt 0 → no sleep; 1 → 5s; 2 → 15s.
+Literal values locked — no exponential backoff, no per-call print/log."""
 
 
 class ToolLoopError(RuntimeError):
@@ -53,6 +59,8 @@ def run_skill_via_tools(
 
     for turn in range(max_tool_calls):
         for attempt in range(max_transient_retries_per_turn + 1):
+            if attempt > 0:
+                time.sleep(_TRANSIENT_BACKOFF_SECONDS[min(attempt, len(_TRANSIENT_BACKOFF_SECONDS) - 1)])
             try:
                 result = provider.generate_with_tools(
                     node_id=node_id,
