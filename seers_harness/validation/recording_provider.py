@@ -56,6 +56,13 @@ def set_current_node_id(node_id: str | None) -> contextvars.Token:
     Returns the ``contextvars.Token`` from :py:meth:`ContextVar.set` so
     callers may revert via :py:meth:`ContextVar.reset` once the node
     boundary closes.
+
+    IN-05 note — the stage runner currently both calls this and also
+    passes ``node_id`` as a kwarg to ``generate_with_tools``. When both
+    are present, the kwarg wins (see :py:meth:`RecordingProvider.generate_with_tools`).
+    The ContextVar fallback exists for callers that drive the provider
+    through wrapper code without the kwarg (e.g. a future trial_runner
+    path); deleting it would be a silent API break for such callers.
     """
     return _current_node_id.set(node_id)
 
