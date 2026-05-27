@@ -72,6 +72,18 @@ def get_current_node_id() -> str | None:
     return _current_node_id.get()
 
 
+def reset_current_node_id(token: contextvars.Token) -> None:
+    """Public helper to revert a prior :func:`set_current_node_id`.
+
+    WR-04 — callers previously reached into the module-private
+    ``_current_node_id`` ContextVar to call ``.reset(token)`` directly.
+    This helper restores API hygiene: the ContextVar stays private,
+    and the round-trip ``token = set_current_node_id(...)`` →
+    ``reset_current_node_id(token)`` is the supported pattern.
+    """
+    _current_node_id.reset(token)
+
+
 class RecordingProvider:
     """Content-neutral recording proxy around ``OpenAICompatibleProvider``.
 

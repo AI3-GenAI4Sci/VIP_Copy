@@ -17,6 +17,7 @@ from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
 from seers_harness.validation.recording_provider import (
     RecordingProvider,
     get_current_node_id,
+    reset_current_node_id,
     set_current_node_id,
 )
 from seers_harness.validation.evidence_writer import flush_evidence
@@ -47,6 +48,7 @@ __all__ = [
     "RecordingProvider",
     "set_current_node_id",
     "get_current_node_id",
+    "reset_current_node_id",
     "flush_evidence",
     # 07-03 additions
     "write_index",
