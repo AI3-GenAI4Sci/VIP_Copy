@@ -58,6 +58,14 @@ def write_evolution_snapshot(
     ``delta_portfolio_after``, and ``trials``. See module docstring for
     the full shape and degradation rules.
     """
+    # IN-04 — finally-clause callers may pass `None` or a non-list when
+    # something upstream went wrong before the events list was
+    # initialised. Treat both as "no events" rather than raising
+    # TypeError inside the cleanup block (which would mask the original
+    # exception via WR-02).
+    if not isinstance(events, list):
+        events = []
+
     delta_portfolio_before: list[Any] = []
     delta_portfolio_after: list[Any] = []
     trials: list[dict[str, Any]] = []
