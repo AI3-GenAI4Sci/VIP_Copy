@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T08:41:35.101Z"
+last_updated: "2026-05-27T09:22:17.309Z"
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 29
-  completed_plans: 25
+  completed_plans: 26
   percent: 38
 ---
 
@@ -17,7 +17,7 @@ progress:
 ## Current Position
 
 Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING
-Plan: 6 of 13
+Plan: 7 of 13
 
 - Focus: phase 8 — runner-touch sweep that covers A-G in a single coherent change, then re-launch real-LLM Stage 1+2+3 on the phase-8 code.
 - Verified baseline: 253 workspace tests pass after CR-01..05 + 7 fix-now WR/IN commits (`pytest -q` green throughout 2026-05-27). No skips, no schema drift.
@@ -166,3 +166,4 @@ Phase 8 charter: `workspace/.planning/phases/08-evolution-wiring-and-runner-debt
 | Phase 08 P03 | 36min | 2 tasks | 9 files |
 | Phase 08 P04 | 14min | 3 tasks | 1 files |
 | Phase 08 P05 | 24min | 3 tasks | 2 files |
+| Phase 08 P06 | 30min | 1 tasks | 4 files |
