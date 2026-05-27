@@ -39,6 +39,10 @@ on disk.
 
 from __future__ import annotations
 
+import json
+import statistics
+from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 
@@ -234,3 +238,201 @@ def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
     if union == 0:
         return 0.0
     return intersection / union
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 behavioral metrics (M1-M5)
+# ---------------------------------------------------------------------------
+
+
+def compute_factor_count_p50(all_factor_artifacts: list[dict]) -> float:
+    """M1: median number of discovered factors per request; threshold >= 3."""
+    counts = [len(d.get("factors", [])) for d in all_factor_artifacts if isinstance(d, dict)]
+    return float(statistics.median(counts)) if counts else 0.0
+
+
+def compute_factor_diversity(all_factor_artifacts: list[dict]) -> float:
+    """M2: mean Jaccard distance across covers-product ids and disposition text."""
+    factors = [
+        f
+        for d in all_factor_artifacts
+        if isinstance(d, dict)
+        for f in d.get("factors", [])
+        if isinstance(f, dict)
+    ]
+    if len(factors) < 2:
+        return 0.0
+    id_sets = [frozenset(f.get("covers_product_ids", [])) for f in factors]
+    text_sets = [
+        _tokenize(str(f.get("transferable_disposition", "") or ""))
+        for f in factors
+    ]
+    return (_mean_jaccard_distance(id_sets) + _mean_jaccard_distance(text_sets)) / 2
+
+
+def compute_copy_candidate_count_p50(all_copy_artifacts: list[dict]) -> float:
+    """M3a: median considered-draft count per copy candidate; threshold >= 2."""
+    counts: list[int] = []
+    for artifact in all_copy_artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        candidates = artifact.get("candidates")
+        if isinstance(candidates, list):
+            counts.extend(
+                len(c.get("considered_drafts", []))
+                for c in candidates
+                if isinstance(c, dict)
+            )
+        elif "considered_drafts" in artifact:
+            counts.append(len(artifact.get("considered_drafts", [])))
+    return float(statistics.median(counts)) if counts else 0.0
+
+
+def compute_reflection_trigger_rate(per_request: list[tuple[int, list[str]]]) -> float:
+    """M3b: share of underspecified requests (factor_count < 3) that called reflect_*."""
+    underspec = [tools for factor_count, tools in per_request if factor_count < 3]
+    if not underspec:
+        return 1.0
+    triggered = sum(
+        1 for tools in underspec if any(str(tool).startswith("reflect_") for tool in tools)
+    )
+    return triggered / len(underspec)
+
+
+def compute_delta_diversity(proposals: list[Any]) -> dict[str, int]:
+    """M4: count distinct delta proposals, targets, and change types."""
+    return {
+        "count": len(proposals),
+        "unique_targets": len({_field(p, "target_skill") for p in proposals if _field(p, "target_skill")}),
+        "unique_change_types": len({_field(p, "change_type") for p in proposals if _field(p, "change_type")}),
+    }
+
+
+def compute_belief_update_count(final_portfolio: list[Any]) -> int:
+    """M5: count portfolio rows with at least one observed trial folded in."""
+    return sum(1 for row in final_portfolio if int(_field(row, "sample_count", 0) or 0) > 0)
+
+
+def build_behavioral_report(stage_dir: str | Path) -> dict[str, Any]:
+    """Aggregate M1-M5 from a stage directory without calling capture code."""
+    stage_path = Path(stage_dir)
+    request_dirs = _request_dirs_from_index(stage_path)
+    factor_artifacts: list[dict] = []
+    copy_artifacts: list[dict] = []
+    reflection_inputs: list[tuple[int, list[str]]] = []
+    proposals: list[Any] = []
+    final_portfolio: list[Any] = []
+
+    for request_dir in request_dirs:
+        factor_artifact = _read_json_if_present(
+            request_dir / "evidence/factor_discovery/artifact.json"
+        )
+        if isinstance(factor_artifact, dict):
+            factor_artifacts.append(factor_artifact)
+            factor_count = len(factor_artifact.get("factors", []))
+            tools = _tool_names_from_jsonl(
+                request_dir / "evidence/factor_discovery/tool_calls.jsonl"
+            )
+            reflection_inputs.append((factor_count, tools))
+        copy_artifact = _read_json_if_present(
+            request_dir / "evidence/copy_generation/artifact.json"
+        )
+        if isinstance(copy_artifact, dict):
+            copy_artifacts.append(copy_artifact)
+
+        snapshot = _read_json_if_present(request_dir / "evolution_snapshot.json")
+        if isinstance(snapshot, dict):
+            portfolio_rows = _portfolio_rows_from_snapshot(snapshot)
+            if portfolio_rows:
+                final_portfolio = portfolio_rows
+                proposals = [
+                    {
+                        "delta_id": _field(row, "delta_id"),
+                        "target_skill": _field(row, "target_skill"),
+                        "change_type": _field(row, "change_type"),
+                    }
+                    for row in portfolio_rows
+                ]
+            elif not proposals:
+                proposals = [{"delta_id": delta_id} for delta_id in snapshot.get("delta_portfolio_after", [])]
+
+    return {
+        "factor_count_p50": compute_factor_count_p50(factor_artifacts),
+        "factor_diversity_score": compute_factor_diversity(factor_artifacts),
+        "copy_candidate_count_p50": compute_copy_candidate_count_p50(copy_artifacts),
+        "reflection_triggered_when_underspec_rate": compute_reflection_trigger_rate(reflection_inputs),
+        "delta_diversity_score": compute_delta_diversity(proposals),
+        "trial_belief_update_count": compute_belief_update_count(final_portfolio),
+    }
+
+
+def _tokenize(text: str) -> frozenset[str]:
+    return frozenset(ch for ch in text.lower() if not ch.isspace())
+
+
+def _mean_jaccard_distance(sets: list[frozenset]) -> float:
+    distances = [
+        1 - len(a & b) / len(a | b)
+        for a, b in combinations(sets, 2)
+        if a or b
+    ]
+    return sum(distances) / len(distances) if distances else 0.0
+
+
+def _field(value: Any, name: str, default: Any = "") -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _read_json_if_present(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _request_dirs_from_index(stage_dir: Path) -> list[Path]:
+    index_doc = _read_json_if_present(stage_dir / "index.json")
+    if not isinstance(index_doc, dict):
+        return [p for p in stage_dir.iterdir() if p.is_dir()] if stage_dir.exists() else []
+    dirs: list[Path] = []
+    for row in index_doc.get("requests", []):
+        if isinstance(row, dict) and row.get("node_id"):
+            dirs.append(stage_dir / str(row["node_id"]))
+    return dirs
+
+
+def _tool_names_from_jsonl(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    names: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        names.extend(_tool_names(item))
+    return names
+
+
+def _tool_names(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        out: list[str] = []
+        if isinstance(value.get("name"), str):
+            out.append(value["name"])
+        fn = value.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+            out.append(fn["name"])
+        for nested in value.values():
+            out.extend(_tool_names(nested))
+        return out
+    if isinstance(value, list):
+        return [name for item in value for name in _tool_names(item)]
+    return []
+
+
+def _portfolio_rows_from_snapshot(snapshot: dict[str, Any]) -> list[Any]:
+    for key in ("portfolio", "final_portfolio", "delta_portfolio"):
+        rows = snapshot.get(key)
+        if isinstance(rows, list):
+            return rows
+    return []

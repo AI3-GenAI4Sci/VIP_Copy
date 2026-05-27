@@ -57,6 +57,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from seers_harness.validation.machine_judges import build_behavioral_report
+
 # D-16 reading-scope cap — keep the manual review queue between 20 and 30
 # entries TOTAL (queue rows + truncation sentinel together must fit in
 # 30). IN-07: previously the cap was 30 + sentinel = 31, exceeding the
@@ -170,6 +172,7 @@ def write_batch_summary(
             "VAL-04": fail_val04,
         },
         "by_failure_class": by_failure_class,
+        "behavioral_metrics": build_behavioral_report(index_path_p.parent),
         "manual_review_queue": queue,
     }
 
