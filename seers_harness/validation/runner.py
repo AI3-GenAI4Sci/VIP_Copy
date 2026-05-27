@@ -136,7 +136,11 @@ from seers_harness.workflow.dag_runner import WorkflowRuntime
 from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
-from seers_harness.validation.exception_classifier import classify, is_trial_failure
+from seers_harness.validation.exception_classifier import (
+    classify,
+    failure_class,
+    is_trial_failure,
+)
 from seers_harness.validation.index_writer import write_index
 from seers_harness.validation.batch_summary_writer import write_batch_summary
 from seers_harness.validation.recording_provider import (
@@ -481,6 +485,7 @@ def _run_one_request(
         "reflow_triggered": False,
         "trial_selected_delta_id": None,
         "exception": None,
+        "failure_class": "ok",
     }
 
     # Stamp the contextvar with a stable per-request id so any
@@ -623,6 +628,7 @@ def _run_stage(
                     "reflow_triggered": False,
                     "trial_selected_delta_id": None,
                     "exception": safe_exc(exc),
+                    "failure_class": failure_class(exc),
                 }
                 if is_trial_failure(exc):
                     # Trial-context failure: the trial_runner hook from
@@ -678,6 +684,7 @@ def _run_stage(
                         "reflow_triggered": False,
                         "trial_selected_delta_id": None,
                         "exception": safe_exc(exc),
+                        "failure_class": failure_class(exc),
                     }
                     if is_trial_failure(exc):
                         records.append(fail_record)

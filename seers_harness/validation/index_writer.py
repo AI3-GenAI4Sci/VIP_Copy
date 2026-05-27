@@ -138,6 +138,9 @@ def write_index(
             # Fail-fast passthrough — exception class/message string the
             # stage runner attaches when a request terminates abnormally.
             "exception": record.get("exception") if isinstance(record, dict) else None,
+            "failure_class": (
+                record.get("failure_class", "ok") if isinstance(record, dict) else "ok"
+            ),
         }
         rows.append(row)
 

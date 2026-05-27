@@ -93,8 +93,12 @@ def write_batch_summary(
     # deduplicate via a parallel seen-set.
     queue: list[str] = []
     seen_in_queue: set[str] = set()
+    by_failure_class: dict[str, int] = {}
 
     for index, row in enumerate(rows):
+        cls = row.get("failure_class", "ok") if isinstance(row, dict) else "ok"
+        by_failure_class[cls] = by_failure_class.get(cls, 0) + 1
+
         if not isinstance(row, dict):
             continue
         # IN-06 — fall back to a positional sentinel when the row's
@@ -165,6 +169,7 @@ def write_batch_summary(
             "VAL-02": fail_val02,
             "VAL-04": fail_val04,
         },
+        "by_failure_class": by_failure_class,
         "manual_review_queue": queue,
     }
 
