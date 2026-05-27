@@ -14,7 +14,7 @@ covered by phase summaries plus tests. Phase 7 is reopened blocked on Phase 8.
 | 5 | Cleanup, deletes, tests, bypass-module regression | Complete | summary `05-SUMMARY.md`; 125/125 suite incl. 20-request E2E smoke |
 | 6 | 5/5 | Complete    | 2026-05-26 |
 | 7 | 6/6 code-side; full real-LLM coverage pending | In progress (blocked on 8) | 2026-05-27 — code-side ready: 4 Critical review fixes (CR-01..04) committed, pytest 251/251 holds, validation stack 07-01..07-06 modules in place. PARTIAL 07-06 acceptance retracted by user; phase reopens until a full post-CR-01..04 real-LLM re-run completes Stage 1 + Stage 2 (20/20) + Stage 3 (20/20), case_analysis F1..F4 judged excellent, evolution reflow events observed, and WR/IN findings closed or scheduled. |
-| 8 | 8/13 | In Progress|  |
+| 8 | 9/13 | In Progress|  |
 
 ## Phase Criteria
 
