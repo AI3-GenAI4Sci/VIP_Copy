@@ -79,6 +79,17 @@ def _register_test_skill(monkeypatch) -> None:
     monkeypatch.setitem(dag_runner.TOOLS_SPEC, "test", [])
     monkeypatch.setitem(dag_runner.TOOL_HANDLERS, "observe", _handlers()["observe"])
     monkeypatch.setitem(dag_runner.TOOL_HANDLERS, "submit_final", _handlers()["submit_final"])
+    # Plan 08-G1: dag_runner now resolves ``skill_bundle`` through
+    # ``load_skill_prose`` (instead of the old "SKILL_BODY" literal). The
+    # synthetic ``skill_name="test"`` used by these tests has no SKILL.md on
+    # disk, so we stub the loader symbol that dag_runner imported into its
+    # namespace. The token-cost behavior under test is orthogonal to SKILL
+    # prose contents, so any non-empty stub is fine.
+    monkeypatch.setattr(
+        dag_runner,
+        "load_skill_prose",
+        lambda skill_name: "STUB_SKILL_PROSE_FOR_TESTS",
+    )
 
 
 def test_workflow_runtime_trace_carries_tool_loop_usage(monkeypatch, tmp_path: Path) -> None:

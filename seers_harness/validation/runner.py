@@ -488,9 +488,14 @@ def _distill_after_stage1(
     rid = stage1_result.records[0]["request_id"]
     stage1_request_dir = stage1_result.stage_dir / _safe_request_dirname(rid)
     trajectory_payload = _build_trajectory_payload(stage1_request_dir)
-    skill_bundle = (
-        LIVE_SKILL_ROOT / "evolution/distill-skill-deltas/SKILL.md"
-    ).read_text(encoding="utf-8")
+    # G1-T2: route through the single SKILL prose primitive in skill_loader.py.
+    # The previous inline file-read here was the second loader and violated
+    # the D2 single-primitive invariant (one entry point in the whole
+    # harness). The loader caches per-skill text and is now the only place
+    # that opens a skill file for system-message bundling.
+    from seers_harness.workflow.skill_loader import load_skill_prose
+
+    skill_bundle = load_skill_prose("distill-skill-deltas")
 
     from seers_harness.agentic.tool_loop import run_skill_via_tools
     from seers_harness.tools.evolution_tools import (

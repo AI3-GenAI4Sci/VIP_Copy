@@ -25,6 +25,7 @@ from seers_harness.core.errors import (
 )
 from seers_harness.tools.skill_tools import TOOL_HANDLERS, TOOLS_SPEC
 from seers_harness.workflow.payloads import provider_payload_for_node
+from seers_harness.workflow.skill_loader import load_skill_prose
 
 
 @dataclass
@@ -81,7 +82,7 @@ class WorkflowRuntime:
                 )
                 result = run_skill_via_tools(
                     skill_name=node.skill_name,
-                    skill_bundle="SKILL_BODY",
+                    skill_bundle=load_skill_prose(node.skill_name),
                     payload=base_payload.get("scenario") or base_payload,
                     tools_spec=TOOLS_SPEC[node.skill_name],
                     tool_handlers=TOOL_HANDLERS,
