@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T09:32:45.053Z"
+last_updated: "2026-05-27T11:16:47.547Z"
 progress:
   total_phases: 8
   completed_phases: 3
@@ -17,7 +17,7 @@ progress:
 ## Current Position
 
 Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING
-Plan: 8 of 13
+Plan: 1 of 13
 
 - Focus: phase 8 — runner-touch sweep that covers A-G in a single coherent change, then re-launch real-LLM Stage 1+2+3 on the phase-8 code.
 - Verified baseline: 253 workspace tests pass after CR-01..05 + 7 fix-now WR/IN commits (`pytest -q` green throughout 2026-05-27). No skips, no schema drift.
