@@ -12,17 +12,18 @@
 
 ## 1. 执行摘要
 
-- **核心改动面积出乎意料地小。** 7 个文件被触碰,主战场是 `seers_harness/validation/runner.py`。所有外部接口(provider、`assemble_portfolio`、`run_request_trial`、`classify`)都已就绪,Phase 8 是把 *已经长好的零件* 用一根线连起来 + 顺手填几个洞,不是新设计。
-- **不能 fail-fast 跳过实测层。** Phase 7 重新打开的根本原因就是 *单元/烟囱测试全绿但实测跑不通*。Phase 8 验收硬挂在一次 Stage 1+2+3 实测 batch 上(`D8-VAL-REAL`),pytest 通过只是必要条件、不是充分条件。计划每一个 Group 的任务都要给出 *它在哪条实测 trace 上被观察到 firing*,否则该任务无法 `completed`。
+- **核心改动面积出乎意料地小。** 7 个文件被触碰,主战场是 `seers_harness/validation/runner.py`。所有外部接口(provider、`assemble_portfolio`、`run_request_trial`、`classify`、`run_skill_via_tools`、`distill-skill-deltas` skill 注册)都已就绪,Phase 8 是把 *已经长好的零件* 用一根线连起来 + 顺手填几个洞 + 加 5 个行为度量,不是新设计。
+- **不能 fail-fast 跳过实测层。** Phase 7 重新打开的根本原因就是 *单元/烟囱测试全绿但实测跑不通*。Phase 8 验收硬挂在一次 Stage 1+2+3 实测 batch 上(`D8-VAL-REAL`),pytest 通过只是必要条件、不是充分条件。**真阳性边界:** 不只是"模块 firing"(假阳性),而是"模块做了它该做的事"—— 挖掘真的产出多角度 factor、文案真的产出多 candidate、模型偷懒时反思真的被消费、演化真的从 trace 算法提取 delta 并跑出 trial outcome 与 baseline 有可测差异。Phase 8 通过 `machine_judges` 加 5 个行为度量(§5.4)统计这些行为,任一未达阈值 = 阻塞 user review,不自动 pass。
 - **三组失败模式都有 0526 trace 锚点,可以精确根因追溯。**
   - 60s 超时:`.run-logs/runner-20260526T183141Z.log:76` `httpx.ReadTimeout → ProviderTransientError`
   - shell-env 漂移:`.run-logs/runner-20260526T174546Z.log:25` `401 Authentication Fails, ****92c7`
   - tool_args 截断:`07-VERIFICATION.md` 记录的 Stage 2 req2 第 940 char `evidence_refs:` 截断
 - **每组最高风险:**
   - Group 1 高风险 = **D**(`--env-file`,安全敏感:绝不能把 key 写日志);
-  - Group 2 高风险 = **F 种子 delta 选择**(选错 → `token_cost_observed` 仍然是 0 → 验收 ACC-2 不成立);
+  - Group 2 高风险 = **F = 演化全链路接线(C4 路径)**:不只是把 `assemble_portfolio` + `run_request_trial` 连进 runner,而是把 `distill-skill-deltas` skill 的 *agent 调用点* 接在 Stage 1 完成后,Stage 2/3 跑 distilled delta 的 trial。每一步用现成 zero-shot agent / pure transform,**禁止 hardcode seed delta、禁止启发式 if-else、禁止人工预定义 patch**。
   - Group 3 高风险 = **WR-05**(过早收紧 `except Exception` 可能在 F 真正接线之前掩盖接线 bug — 见 §7 测序复核)。
 - **测序 *已锁* 但需要一处微调:** 在 F 落地 *之前* 不要执行 WR-05。详见 §7。
+- **B 项粒度澄清(2026-05-27 grep 后修正):** `seers_harness/agentic/tool_loop.py:31-65` 的 `run_skill_via_tools` **已经实现 turn 内 transient retry**(`max_transient_retries_per_turn=2` 默认,共 3 次尝试),但 *无 backoff*。Charter B 项的"请求级 retry 5s/15s backoff"在已有 retry 点上 *加 backoff* 即可实现,**不需要在 `_run_one_request` 外另起一层 wrapper**。这避免 §2-B 原伪代码中的"finally 重复 flush_evidence" 陷阱,也符合用户审美"避免多层嵌套"。详见 §2-B 重写。
 
 ---
 
@@ -55,54 +56,80 @@ timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.g
 - 不要把 180 写成同一行的 magic number。`runtime_facts` 和 `deepseek_provider_from_env` 用同一个常量来源(可以新增一个 `_DEFAULT_TIMEOUT_SECONDS = 180` 模块级常量),避免 future drift。
 - 不影响 `OpenAI` SDK 内部的 *connect* 超时;DeepSeek beta 在 TLS 握手阶段从未观察到 >5s。
 
-### B. 请求级 transient 重试
+### B. 请求级 transient 重试(落在已有 retry 点上加 backoff)
 
-**修改点:** `seers_harness/validation/runner.py:425-535` `_run_one_request` 体内 *或* 其调用点的薄层(更倾向于 *调用点的薄层*,见下方陷阱)。
+**关键 grep 发现(2026-05-27,撤回原 §2-B 的 wrapper 设计):**
 
-**目标行为:**
-- 仅在 `ProviderTransientError` 上重试。`ProviderAuthError` / `ProviderRateLimitError` / `ProviderResponseError` / `TrialFailure` / `SchemaError` / `AssertionError` 一律不重试,沿用 D-02 / D-19。
-- 重试预算 = 2 次额外尝试(总共 3 次)。
-- 回退序列 = 5s, 15s(常量化,不要硬编码进 sleep 调用)。
-- D-03 不变:SDK 侧 `max_retries=0` 默认值保持,这是 *请求级* 重试不是 *HTTP 级* 重试。
-
-**伪代码(推荐:wrapper 函数而非 `_run_one_request` 内层 `try/except` 循环):**
+`seers_harness/agentic/tool_loop.py:31-65` 的 `run_skill_via_tools` **已经实现 turn 内 transient retry**:
 
 ```python
-_REQUEST_TRANSIENT_BACKOFFS = (5.0, 15.0)  # 两次额外尝试
-
-def _run_one_request_with_transient_retry(**kwargs) -> dict:
-    last_exc: ProviderTransientError | None = None
-    for attempt, backoff in enumerate([0.0, *_REQUEST_TRANSIENT_BACKOFFS]):
-        if backoff > 0:
-            time.sleep(backoff)
+# tool_loop.py:53-65 (existing)
+for turn in range(max_tool_calls):
+    for attempt in range(max_transient_retries_per_turn + 1):
         try:
-            return _run_one_request(**kwargs)
-        except ProviderTransientError as exc:
-            last_exc = exc
-            print(f"[runner] req {kwargs['request_id']} transient (attempt {attempt+1}/3); backoff={_REQUEST_TRANSIENT_BACKOFFS[attempt] if attempt < 2 else 'none'}", file=sys.stderr)
-            continue
-    assert last_exc is not None
-    raise last_exc
+            result = provider.generate_with_tools(...)
+            break
+        except ProviderTransientError:
+            if attempt == max_transient_retries_per_turn:
+                raise
 ```
 
-调用点:`_run_stage` 内的 `record = _run_one_request(...)` 改成 `record = _run_one_request_with_transient_retry(...)`,并发分支(`pool.submit(_run_one_request, ...)`)同样改为 submit wrapper。
+`max_transient_retries_per_turn` 默认 2,即一次 turn 内有 3 次尝试。`dag_runner.py:82` 的调用点没有显式覆写,沿用默认。**这意味着:**
+
+- charter B 项的"3 次尝试"已经实现,但是 *无 backoff* —— immediate retry,DeepSeek 端 transient 通常需要几秒恢复时间,无 backoff 会把 budget 燃尽。
+- charter B 写的"包 `_run_one_request`"会引入 *第二层* retry(turn 级 + 请求级),且包到 `_run_one_request` 外面会让 `finally:` 块的 `flush_evidence` / `write_evolution_snapshot` 在每次重试都跑一次,文件被覆盖,evidence 失真。
+
+**修正设计:在已有 retry 点加 backoff,不另起 wrapper。**
+
+**修改点:** `seers_harness/agentic/tool_loop.py:53-65`
+
+```python
+# 当前:
+for attempt in range(max_transient_retries_per_turn + 1):
+    try:
+        result = provider.generate_with_tools(...)
+        break
+    except ProviderTransientError:
+        if attempt == max_transient_retries_per_turn:
+            raise
+
+# 目标(B 项):attempt 0 立即,attempt 1 sleep 5s,attempt 2 sleep 15s
+_TRANSIENT_BACKOFF_SECONDS: tuple[float, ...] = (0.0, 5.0, 15.0)
+
+for attempt in range(max_transient_retries_per_turn + 1):
+    if attempt > 0:
+        backoff = _TRANSIENT_BACKOFF_SECONDS[min(attempt, len(_TRANSIENT_BACKOFF_SECONDS) - 1)]
+        time.sleep(backoff)
+    try:
+        result = provider.generate_with_tools(...)
+        break
+    except ProviderTransientError:
+        if attempt == max_transient_retries_per_turn:
+            raise
+```
+
+**为什么这是更好的位置:**
+- *单层循环,无嵌套*。已有 turn-internal retry 是天然位置,不引入第二层。
+- backoff 总和 = 5s + 15s = 20s。Stage 3 c=20 的 worst-case 增量 ≤ 20s × 20 = 400s,仍可接受;但 c=20 的 worker 是 *独立线程*,backoff 不阻塞其他 request,实际增量更接近 20s。
+- 不需要 `_run_one_request_with_transient_retry` wrapper,不需要在 `_run_stage` 改 submit 调用,**runner.py 零改动**(B 项落在 tool_loop)。
+- `finally:` flush 块仍只在 `_run_one_request` 退出时执行一次,evidence 完整。
 
 **测试锚点:**
-- 现有:`tests/test_validation_runner.py` 必须有 `provider_factory` 注入故障注入 provider 的模式 —— 沿用之。
+- 现有:`tests/test_tool_loop.py`(若存在;否则在 `tests/test_validation_runner.py` 加 fault-injection provider)。
 - 新增:
-  - `test_runner_retries_transient_twice_then_succeeds` —— 注入一个 provider 前 2 次 raise `ProviderTransientError`、第 3 次成功 → 整个请求 record 成功,无 fail-fast。
-  - `test_runner_does_not_retry_auth_error` —— 注入 `ProviderAuthError` → 第一次就 fail-fast,无第二次 attempt。
-  - `test_runner_exhausts_transient_budget` —— 注入连续 3 次 transient → fail-fast 路径走 D-19 `provider_error`。
-  - 监视:5s + 15s 回退总和 = 20s,Stage 3 c=20 的 worst case 增量 ≤ 20s × 20 = 400s,可接受。
+  - `test_tool_loop_backoff_on_transient` —— monkeypatch `time.sleep`,inject provider 前 2 次 raise `ProviderTransientError`、第 3 次成功 → 验证 `time.sleep` 被调用 2 次,值分别是 5.0、15.0。
+  - `test_tool_loop_does_not_backoff_on_first_attempt` —— 第一次 attempt 不 sleep。
+  - `test_tool_loop_does_not_retry_auth_error` —— `ProviderAuthError` → 第一次就 fail-fast,无 sleep。
+  - `test_tool_loop_exhausts_transient_budget` —— 连续 3 次 transient → raise(走 D-19 `provider_error`)。
 
-**实测证据:**
-- 计划应包含一个 **故障注入实测请求**(在 batch 中标注 `fault_inject=true`,使得它不计入"honest"通过率),以便保证 transient 路径在 phase-8 batch 中至少 firing 过一次。理由:`.run-logs/runner-20260526T183141Z.log:125` 显示真实 transient 不一定每次 batch 都自然出现;不主动注入就可能没证据。
-- 自然 transient 出现时:`.run-logs/runner-<phase-8-ts>.log` 含 `transient (attempt N/3); backoff=Ns` 文本 + 最终请求成功(或 budget 耗尽 fail-fast)。
+**实测证据(D8-VAL-REAL):**
+- 唯一 *额外* 实测要求(超过 pytest):phase-8 batch 期间任一请求若发生自然 transient,`.run-logs/runner-<ts>.log` 应该出现 `ProviderTransientError` 后跟着的 *下一个 turn 仍然成功*(隐含 sleep 已生效),整个 request 没有 fail-fast。
+- 用户决定(Q3 = B):**不在 batch 中混入故障注入请求**。如果 phase-8 batch 中没有自然 transient,B 项以 pytest 4 路径单测为 *唯一证据*,不伪造实测证据。
 
 **陷阱:**
-- *不要* 在 `_run_one_request` 的 `try:` 块内部加 retry —— `finally:` 块(flush_evidence + write_evolution_snapshot)每次重试会重复 flush,文件被覆盖。Wrapper 在 `_run_one_request` 外面才能保证 evidence 只 flush 最后一次的状态。
-- *不要* 把 `time.sleep` 写在 wrapper 内部 *且* 让它阻塞 ThreadPool worker —— sleep 期间该 worker 不能 progress 其他请求。Stage 3 c=20 的并发模型可以容忍(每个 worker 独立),但要在测试里 mock `time.sleep` 否则单测会真睡 20s。
-- *不要* 把 wrapper 移到 `_run_stage` 的 future submission 之外(批级)—— Stage 3 的并发模型要求每个请求独立。Wrapper 必须按 *请求* 包,不能按 batch 包。
+- *不要* 把 `_TRANSIENT_BACKOFF_SECONDS` 改成"每次 attempt 翻倍"(指数退避)—— charter 锁定 5s, 15s 字面值,且固定值更可测。
+- *不要* 在 `time.sleep` 外加 `print` —— 已有 retry 点已经在 LLM trace 中可见(下一个 turn 是 retry)。新增 print 是噪声。
+- *不要* 把 backoff 加到 `_run_one_request` 外面 —— 见上方"为什么这是更好的位置"。
 
 ### C. CR-05 审计(verify-only)
 
@@ -353,77 +380,151 @@ for row in rows:
 - **F ACC-2 要求:** `trials[]` 非空。这意味着 `events` 必须含至少一个 `trial_started` + 一个 `trial_succeeded`(或 `trial_failed`)对。
 - `run_request_trial` 内部已经 append 这些 event(`trial_runner.py:204-212, 229-242, 247-254`)—— F 接线只需要 *实际调用* `run_request_trial` 并传入 `events=events` 即可。
 
-### 3.4 种子 delta 选择 — 候选与决策
+### 3.4 演化全链路接线(C4 路径 — agent 产 delta,无 hardcoded seed)
 
-**Constraint(charter Q1 + D8-VAL-REAL):** seed delta 必须使 `TrialOutcome.token_cost_observed > 0`(或者至少让 `trials[]` 非空可观测)。No-op patch 不满足 charter 用户的"实际工作"要求。
+**用户决定(Q2 = C4,2026-05-27):** 撤回 C3(HTML 注释种子),改为让 `distill-skill-deltas` agent 在 Stage 1 完成后从 *真实 trace* 算法提取 delta,Stage 2/3 跑该 delta 的 trial。**禁止 hardcode seed、禁止人工预定义 patch、禁止启发式 if-else。**
 
-**Candidates 调研:**
+**全链路零件清单(grep verified):**
 
-`grep -rn 'DeltaProposal\|target_skill' tests/ workspace-skills/` 找现成 delta fixtures:
+| 零件 | 路径 | 角色 |
+|---|---|---|
+| `distill-skill-deltas` SKILL.md | `workflow-skills/evolution/distill-skill-deltas/SKILL.md` | Tool-use agent 形态,产 `DeltaDistillationArtifact` |
+| `EVOLUTION_TOOLS_SPEC` + `EVOLUTION_TOOL_HANDLERS` | `seers_harness/tools/evolution_tools.py:376, 385` | `record_delta_observation` / `record_delta_change` / `submit_delta_distillation_final` 三 handler |
+| `run_skill_via_tools` | `seers_harness/agentic/tool_loop.py:31` | Generic agent driver,接受 skill + tools + provider |
+| `DeltaDistillationArtifact` → `DeltaProposal[]` | `seers_harness/evolution/delta_portfolio.py:124` (model) | distill artifact 携带的 proposal 列表 |
+| `assemble_portfolio` | `delta_portfolio.py:395` | Merge `DeltaProposal[]` 进 `DeltaPortfolioRow[]` |
+| `run_request_trial` | `evolution/trial_runner.py:155` | 跑 trial,emit events,返回 `TrialOutcome` |
+| `update_after_trial` | `delta_portfolio.py:193` | 把 trial outcome 折回 portfolio belief counters |
 
-| 候选 | 来源 | target_skill | proposed_change 性质 | `token_cost_observed > 0`? |
-|---|---|---|---|---|
-| C1 | 测试 fixture:`tests/test_trial_runner_smoke.py` 的 patch(若存在)| 某个 SKILL.md | 通常是 marker text 插入 | 由 IN-01 决定;F 项本身让 trial fire 即可 |
-| C2 | `.planning/intel/decisions.md` 中描述的 P-10/P-11 修订意图 | `discover-personalization-factors/SKILL.md` | "在 transferable_disposition 描述中插入一句强化用户信号去映射的句子" | 真实 prompt-level 改动,token cost 可能微增 |
-| C3 | 手工构造一个 minimal 真 delta:在 `generate-copy-candidates/SKILL.md` 第 1 行后插入一个空注释 | `generate-copy-candidates/SKILL.md` | `"<!-- phase-8 seed trial -->\n" + 原文` | Token cost 极小但非 0(skill bundle 多了 ~20 token);trial fires |
+**已就绪。零件都在,phase 8 只需接线。**
 
-**推荐:C3。** 理由:
-1. 不依赖任何外部 fixture(测试 fixture 可能不存在或与 phase 6 测试耦合)。
-2. *最小语义改动* —— 只插入一个 HTML 注释,运行时行为不会因为这个注释而出现 quality 波动,这意味着 trial outcome 的 `success` 标记可信反映 *runner 是否正确接线*,不被 prompt 漂移污染。
-3. token_cost > 0 由 IN-01 接线保证(本项 only 负责"让 trial fire"),C3 满足 trials[] 非空的弱约束。
-
-**位置:** 在 `runner.py` 的 `run()` 函数中,`_delta_portfolio_empty: list[Any] = []`(line 786)替换为:
+**接线伪代码(在 runner.py `run()` 函数中):**
 
 ```python
-# F 接线:phase 8 种子 delta。Phase 6 演化设计要求 delta_portfolio 起始为空(D-18),
-# 但 phase 7 acceptance ACC-2 要求 trials[] 非空。一颗 seed 同时满足两者:
-# delta_portfolio 起始空 → 此处 *附加* 一颗 seed → portfolio 有 1 个 row。
-from seers_harness.evolution.delta_portfolio import DeltaProposal, assemble_portfolio
-from seers_harness.evolution.trial_runner import SkillDeltaPatch, sha256_of_text
+# 现有(line 786):
+_delta_portfolio_empty: list[Any] = []  # noqa: F841
 
-_SEED_TARGET = "generate-copy-candidates/SKILL.md"  # 相对 live_skill_root
-_live_skill_root = Path(__file__).resolve().parents[2] / "workspace-skills" / "current"  # 验证路径,可能需调整
-_original_text = (_live_skill_root / _SEED_TARGET).read_text(encoding="utf-8")
-_seed_patch = SkillDeltaPatch(
-    target_path=_SEED_TARGET,
-    original_text_sha256=sha256_of_text(_original_text),
-    replacement_text="<!-- phase-8 seed trial -->\n" + _original_text,
-)
-# delta_portfolio 起始非空(F 接线种子)
-_seed_proposal = DeltaProposal(
-    delta_id="phase-8-seed-001",
-    target_skill=_SEED_TARGET,
-    change_type="modify_skill",
-    observation="phase-8 seed delta for evolution wiring smoke",
-    proposed_change="prepend HTML comment marker",
-    evidence_refs=[{"path": "08-CONTEXT.md#D8-F2", "snippet": "seed delta"}],
-    applicable_surface=[_SEED_TARGET],
-    failure_types=[],
-)
-_initial_portfolio = assemble_portfolio([], [_seed_proposal])
-# 注:_initial_portfolio 现在含 1 个 DeltaPortfolioRow
+# 改为:
+delta_portfolio: list[DeltaPortfolioRow] = []  # D-18:起始空,distill 后填充
+
+# Stage 1 后,distill skill 跑一次 agent 调用(用 Stage 1 的 trace 作为 payload):
+for stage in stages:
+    result = _run_stage(stage=stage, request_ids=request_ids, ..., delta_portfolio=delta_portfolio)
+    if not result.passed:
+        return 1
+
+    # 演化接线:Stage 1 完成后调用 distill agent,Stage 2/3 才有 trial 可跑
+    if stage == 1 and result.passed:
+        delta_portfolio = _distill_after_stage1(
+            stage1_result=result,
+            provider_factory=provider_factory,
+            current_portfolio=delta_portfolio,
+        )
+        # delta_portfolio 现在含 1 个或多个 DeltaPortfolioRow,由 agent 从 trace 提取
 ```
 
-**Planner 注意:** 上述路径 `workspace-skills/current/` 需要 planner 在写 PLAN 任务 `<read_first>` 时 *先 grep 确认* —— 当前 repo 的 skill root 实际在 `workflow-skills/current/`(已 verified):
+**`_distill_after_stage1` 实现要点:**
 
-```
-$ ls workflow-skills/current/
-discover-personalization-factors/SKILL.md
-generate-copy-candidates/SKILL.md
-personalized-copy-rubric-judge/SKILL.md
+```python
+def _distill_after_stage1(
+    *,
+    stage1_result: StageResult,
+    provider_factory: ProviderFactory,
+    current_portfolio: list[DeltaPortfolioRow],
+) -> list[DeltaPortfolioRow]:
+    """读 Stage 1 trace,跑 distill-skill-deltas agent,返回新 portfolio。
+
+    Agent 产 delta;此函数零启发式 / 零模板预定义。
+    """
+    # 1. 构造 distill payload:Stage 1 唯一一个请求的完整 trajectory
+    #    (factor / copy / rubric artifacts + tool-call sequence + token usage)
+    stage1_request_dir = stage1_result.stage_dir / _safe_request_dirname(stage1_result.records[0]["request_id"])
+    trajectory_payload = _build_trajectory_payload(stage1_request_dir)
+
+    # 2. 跑 agent:run_skill_via_tools 是已存在的 generic driver
+    from seers_harness.agentic.tool_loop import run_skill_via_tools
+    from seers_harness.tools.evolution_tools import EVOLUTION_TOOLS_SPEC, EVOLUTION_TOOL_HANDLERS
+    from seers_harness.evolution.delta_portfolio import DeltaDistillationArtifact, assemble_portfolio
+
+    skill_bundle = (LIVE_SKILL_ROOT / "evolution/distill-skill-deltas/SKILL.md").read_text()
+    distill_provider = RecordingProvider(provider_factory(), [])  # capture distill agent 的 trace 为审计证据
+
+    result = run_skill_via_tools(
+        skill_name="distill-skill-deltas",
+        skill_bundle=skill_bundle,
+        payload=trajectory_payload,
+        tools_spec=EVOLUTION_TOOLS_SPEC["distill-skill-deltas"],
+        tool_handlers=EVOLUTION_TOOL_HANDLERS,
+        provider=distill_provider,
+        node_id="distill_after_stage1",
+    )
+
+    # 3. result.artifact 是 dict;model_validate 进 DeltaDistillationArtifact
+    artifact = DeltaDistillationArtifact.model_validate(result.artifact)
+    proposals = artifact.proposals  # DeltaProposal[]
+
+    # 4. 合并进 portfolio(纯 transform,zero 启发式)
+    return assemble_portfolio(current_portfolio, proposals, events=None)
 ```
 
-修正 `_live_skill_root` 应该指向 `workflow-skills/current/` 而非 `workspace-skills/current/`。这是 RESEARCH 阶段发现并校正的一处路径细节。
+**`_build_trajectory_payload` 是 *纯 transform*,无启发式:**
+
+```python
+def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
+    """读 stage1 request dir 中所有 evidence files,组装 distill payload。
+
+    Pure file read + dict assembly. No heuristic filtering, no LLM-side processing.
+    """
+    evidence = stage1_request_dir / "evidence"
+    payload = {
+        "request_id": stage1_request_dir.name,
+        "factor_discovery": json.loads((evidence / "factor_discovery/artifact.json").read_text()),
+        "copy_generation": json.loads((evidence / "copy_generation/artifact.json").read_text()),
+        "personalized_copy_rubric": json.loads((evidence / "personalized_copy_rubric/artifact.json").read_text()),
+        "tool_calls_per_node": {
+            n: [json.loads(l) for l in (evidence / n / "tool_calls.jsonl").read_text().splitlines() if l]
+            for n in ("factor_discovery", "copy_generation", "personalized_copy_rubric")
+        },
+        "usage_per_node": {
+            n: json.loads((evidence / n / "usage.json").read_text())
+            for n in ("factor_discovery", "copy_generation", "personalized_copy_rubric")
+        },
+    }
+    return payload
+```
+
+**`run_request_trial` 调用点(在 `_run_one_request` 内,Stage 2/3 用):**
+
+仍按原 §3.5 伪代码,但 `delta_portfolio` 现在来自 distill agent 而非 hardcoded seed。
+
+**关键审美约束(用户 2026-05-27 reaffirmed):**
+1. **该用 agent 的别用人工** —— distill agent 由 LLM 读 trace 产 delta,phase 8 不内置任何"delta 模板"或"目标 SKILL 黑白名单"。
+2. **该用算法的别用启发式** —— `assemble_portfolio` 是 set-merge by `delta_id`,纯函数;`update_after_trial` 是 bandit counter 更新,纯算术;`_build_trajectory_payload` 是 file-read + dict-assembly,无 filtering / weighting。
+3. **多层嵌套禁止** —— `_distill_after_stage1` 单层函数调用,无 wrapper-in-wrapper;`run_skill_via_tools` 已经是 agent 调用的 generic seam,不自己造第二个。
+4. **失败行为:** 若 distill agent 在 Stage 1 后产出 0 proposals,`delta_portfolio` 保持空 → Stage 2/3 不跑 trial → ACC-2 失败 → phase 8 reopen。**禁止 fallback 到 hardcoded seed**。这是真阳性边界:agent 没产 delta 就是没产,不补救。
+
+**测试锚点:**
+- 新增:
+  - `test_distill_after_stage1_with_recording_provider` —— 注入一个 fake provider(返回 valid `DeltaDistillationArtifact`)+ 一个 fake stage1_result → `_distill_after_stage1` 返回 portfolio 含 1+ row。
+  - `test_distill_after_stage1_empty_proposals_yields_empty_portfolio` —— 注入 provider 返回 `proposals=[]` → portfolio 保持空,不 raise。
+  - `test_distill_after_stage1_invalid_artifact_raises` —— 注入 provider 返回 schema-invalid artifact → `ValidationError` 浮到 caller,fail-fast。
+
+**实测证据:**
+- Phase-8 batch Stage 1 完成后,日志含 `distill_after_stage1` node_id 的 tool_loop_summary trace。
+- `delta_portfolio` 在 Stage 1 结束时 *non-empty*(数量由 agent 决定,不强制阈值)。
+- Stage 2/3 期间至少一个请求的 `evolution_snapshot.json` 含 `trial_succeeded` 或 `trial_failed` event,且 `trial.delta_id` 与 distill 产出的某个 proposal 的 `delta_id` 匹配。
+- Stage 2/3 结束后,portfolio rows 的 `sample_count` / `success_count` / `failure_count` non-zero(`update_after_trial` 真的把 outcome 折回)。这是 §5.4 metric `trial_belief_update_count > 0` 的来源。
 
 ### 3.5 F 接线伪代码
 
+`_run_one_request` 接收 `delta_portfolio` 和 `live_skill_root`(由 Stage 1 后的 distill 填充):
+
 ```python
-# _run_one_request 接收一个新参数 delta_portfolio_for_trial:
 def _run_one_request(
     *, request_id, scenario, nodes, provider_factory, request_dir,
     events: list[dict],
-    delta_portfolio: list[DeltaPortfolioRow] = (),  # F 新增
-    live_skill_root: Path,                          # F 新增
+    delta_portfolio: list[DeltaPortfolioRow],  # F:由 distill agent 填充
+    live_skill_root: Path,                     # F:用于 trial 的 skill root
 ) -> dict:
     inner_provider = provider_factory()
     request_log: list[dict] = []
@@ -435,13 +536,13 @@ def _run_one_request(
 
     token = set_current_node_id(request_id)
     try:
-        # F 接线:host request 跑常规路径
+        # Host request:常规 3-node DAG
         result_paths = runtime.run_request(scenario=scenario, nodes=list(nodes))
-        # ... 现有 artifact 解析逻辑 ...
+        # ... existing artifact 解析 ...
 
         # F 接线:host 成功后,对 portfolio 中每个 row 跑一次 trial
+        # delta_portfolio 由 _distill_after_stage1 填充;Stage 1 时 portfolio 为空,for 循环空跑
         for portfolio_row in delta_portfolio:
-            from seers_harness.evolution.trial_runner import run_request_trial, SkillDeltaPatch
             patch = _patch_from_portfolio_row(portfolio_row, live_skill_root)
             trial_workspace = request_dir / "trial_workspace" / portfolio_row.delta_id
             trial_outcome = run_request_trial(
@@ -453,54 +554,96 @@ def _run_one_request(
                 patch=patch,
                 request_id=request_id,
                 scenario_id=str(scenario.get("scenario_id", "")),
-                events=events,  # ← trial_started / trial_succeeded events 都 append 进同一个 events list
+                events=events,
             )
-            # 把 outcome 的 delta_id 浮到 record(D-10 列)
             if trial_outcome.trial_delta_id is not None:
                 record["trial_selected_delta_id"] = trial_outcome.trial_delta_id
+            # 把 outcome 折回 portfolio belief counters(算法,非启发式)
+            from seers_harness.evolution.delta_portfolio import update_after_trial
+            portfolio_row = update_after_trial(portfolio_row, trial_outcome)
     finally:
         # existing finally: _cv.reset, flush_evidence, write_evolution_snapshot
         ...
     return record
 ```
 
-**`_patch_from_portfolio_row`** 是一个新 helper:从 portfolio row(`target_skill` + `proposed_change`)读 live file 算 sha → 构造 `SkillDeltaPatch`。或者更简单:在 process start 时和 `_seed_proposal` 一起构造 `SkillDeltaPatch` 并把它 *直接挂在 portfolio row* 之外作为旁路。两种都可行,planner 选 simpler 一种。
+**`_patch_from_portfolio_row`** 是纯 transform:读 `portfolio_row.target_skill` 对应 live file,计算 sha256,构造 `SkillDeltaPatch`。如果 `proposed_change` 是 textual 的(SKILL.md 文本替换),直接构造 patch;如果 `proposed_change` 是更高级的指令(如 "add a new tool"),phase 8 范围内只支持 textual modify_skill case,其他类型直接 skip(`portfolio_row.change_type` 不是 `"modify_skill"` 时跳过)。
+
+```python
+def _patch_from_portfolio_row(row: DeltaPortfolioRow, live_skill_root: Path) -> SkillDeltaPatch | None:
+    """从 portfolio row 构造可应用的 patch。
+
+    phase 8 范围:只支持 modify_skill 类型 + 文本替换。其他类型返回 None(skip)。
+    proposed_change 是 agent 产出的 full replacement_text。
+    """
+    if row.change_type != "modify_skill":
+        return None
+    live_target = live_skill_root / row.target_skill
+    if not live_target.exists():
+        return None  # agent 引用了不存在的 skill,skip 而不 raise(D8-VAL-ROOTCAUSE:不掩盖)
+    live_text = live_target.read_text(encoding="utf-8")
+    return SkillDeltaPatch(
+        target_path=row.target_skill,
+        original_text_sha256=sha256_of_text(live_text),
+        replacement_text=row.proposed_change,
+    )
+```
 
 **`_run_stage` 调用点更新:**
 ```python
-record = _run_one_request_with_transient_retry(  # B 包裹
+record = _run_one_request(   # B 项落在 tool_loop,这里不再 wrap
     request_id=rid,
     scenario=scenario,
     nodes=nodes,
     provider_factory=provider_factory,
     request_dir=request_dir,
     events=events,
-    delta_portfolio=delta_portfolio,    # F 接线传入
-    live_skill_root=live_skill_root,    # F 接线传入
+    delta_portfolio=delta_portfolio,    # F 接线
+    live_skill_root=live_skill_root,    # F 接线
 )
 ```
 
-`run()` 函数需要把 `delta_portfolio` 和 `live_skill_root` 一路传到 `_run_stage` 再传到 `_run_one_request`。
+`run()` 函数需要把 `delta_portfolio`(在 Stage 1 后被 `_distill_after_stage1` 替换)和 `live_skill_root` 一路传给 `_run_stage` 再传给 `_run_one_request`。
 
 ### 3.6 F 接线测试锚点
 
-- 现有:`tests/test_trial_runner_smoke.py`(如果存在)—— 模拟 portfolio 中 1 颗 delta,跑一个请求,断言 `events` 含 `trial_succeeded`,outcome.success=True。
+- 现有:`tests/test_trial_runner_smoke.py`(phase-6 baseline)。
 - 新增:
-  - `test_runner_fires_trial_when_portfolio_nonempty` —— inject seed portfolio + fake provider → 跑 1 个请求 → `evolution_snapshot.json` 解析后 `trials` 列表非空。
-  - `test_runner_skips_trial_when_portfolio_empty` —— inject empty portfolio → `trials` 列表为空,host request 仍成功(D-18 保护)。
-  - `test_runner_trial_failure_does_not_abort_host` —— inject portfolio + provider 在 trial 中 raise → host record.exception is None, evolution_snapshot 含 `trial_failed`。
-  - `test_seed_patch_hash_validation_drift` —— modify live skill file → seed patch hash mismatch → process start 时 raise(fail-fast on stale phase-8 fixture)。
+  - `test_run_one_request_fires_trial_when_portfolio_nonempty` —— inject agent-produced portfolio (DeltaPortfolioRow 含 valid `change_type=modify_skill` + `proposed_change=full replacement text`) + fake provider → 跑 1 个请求 → `evolution_snapshot.json` 解析后 `trials[]` 非空 + outcome.success=True。
+  - `test_run_one_request_skips_trial_when_portfolio_empty` —— empty portfolio(模拟 Stage 1 / distill 前)→ `trials[]` 为空,host request 仍成功(D-18)。
+  - `test_run_one_request_trial_failure_does_not_abort_host` —— inject portfolio + provider 在 trial 中 raise → host record.exception is None, evolution_snapshot 含 `trial_failed`。
+  - `test_run_one_request_skips_non_modify_skill_delta` —— portfolio row `change_type="add_skill"` → skip 不 raise(phase 8 范围内只支持 modify_skill)。
+  - `test_run_one_request_skips_drifted_target_path` —— portfolio row `target_skill` 不存在 → skip,不 raise。
+  - `test_distill_after_stage1_with_recording_provider` —— fake provider 返回 valid distill artifact + fake stage1 evidence dir → `_distill_after_stage1` 返回 portfolio 含 1+ row。
+  - `test_distill_after_stage1_empty_proposals_yields_empty_portfolio` —— provider 返回 `proposals=[]` → portfolio 空,不 raise。
+  - `test_distill_after_stage1_invalid_artifact_raises` —— provider 返回 schema-invalid artifact → `ValidationError` 浮到 caller。
+  - `test_run_drives_distill_only_after_stage1_passes` —— inject failing Stage 1 → distill 不被调用;passing Stage 1 → distill 被调用恰一次。
 
-### 3.7 F 接线实测证据
+### 3.7 F 接线实测证据(真阳性边界)
 
-**ACC-2 verbatim:** `evolution_snapshot.json` 含至少 1 个非空 `trials[]`。
+**ACC-2 verbatim:** `evolution_snapshot.json` 含至少 1 个非空 `trials[]`。**但这是假阳性下限** —— phase 8 真阳性需要见 §5.4 行为度量。
 
 Phase-8 batch 完成后:
 ```bash
+# 1. distill agent 在 Stage 1 后真的跑了(audit log)
+grep -E "node=distill_after_stage1" tests/smoke/.runs/<phase-8-ts>/.../runner-*.log
+# 期望:1 行 tool_loop_summary 事件
+
+# 2. trials[] 非空 + delta_id 与 distilled proposal 一致
 find tests/smoke/.runs/<phase-8-ts>/ -name evolution_snapshot.json \
-  -exec python -c "import sys,json; d=json.load(open(sys.argv[1])); print(sys.argv[1], 'trials:', len(d.get('trials',[])))" {} \;
+  -exec python -c "import sys,json; d=json.load(open(sys.argv[1])); \
+  trials=d.get('trials',[]); \
+  print(sys.argv[1], 'trials:', len(trials), 'delta_ids:', [t.get('delta_id') for t in trials])" {} \;
+# 期望:Stage 2/3 至少一个请求 trials >= 1,delta_id 是 agent 产出的 id 而非 'phase-8-seed-001'
+
+# 3. portfolio belief 真的被 update_after_trial 折回(IN-01 + F 闭环证据)
+# 在 batch 结束后 dump portfolio state(如果 runner.py 暴露的话);否则在单测验证
 ```
-期望:每个请求(20 + 20 + 1 = 41 个请求 across 3 stages)的 snapshot 都有 `trials: 1`(seed delta 每个请求都试一次)或 `trials: 0`(如果 planner 决定 trial cadence 按 N 个 host requests 一次)。**至少一个 stage 的至少一个请求 trials 数 > 0** 是 ACC-2 的最低门槛。
+**真阳性最低门槛(用户 2026-05-27 框架):**
+- distill agent 在真 trace 上跑通,产出 ≥1 DeltaProposal(由 agent 决定数量,非阈值)
+- 至少一个 Stage 2/3 请求 fire trial,delta_id 来源于 distill artifact
+- trial outcome 的 `success` / `failure_category` / `token_cost_observed` 全部 non-default
+- `update_after_trial` 折回的 portfolio row `sample_count` >0 — 见 §5.4 metric M5
 
 ---
 
@@ -754,19 +897,20 @@ Phase 8 验证分三层,每一层职责不可由相邻层替代。任何 deliver
 
 | Deliverable | 新增/修改测试 | 路径 |
 |---|---|---|
-| A | `test_provider_timeout_default_180s` | `tests/test_provider_openai_compatible.py` |
-| B (×3) | transient retry 3 路径(2 次成功 / 不重试 auth / 耗尽 budget) | `tests/test_validation_runner.py` |
-| C | `test_parse_retry_log_present_on_retry`(新增 log 行后) | `tests/test_provider_openai_compatible.py` |
+| A | `test_provider_timeout_default_180s` + `test_deepseek_runtime_facts_default_timeout_180s` | `tests/test_provider_openai_compatible.py` |
+| B (×4) | tool_loop backoff 路径(0s/5s/15s 序列 / 不重试 auth / 耗尽 budget / 首次 attempt 不 sleep) | `tests/test_tool_loop.py`(若存在;否则补建) |
+| C | `test_parse_retry_log_present_on_retry`(C 项需新增 1 行 log)| `tests/test_provider_openai_compatible.py` |
 | D (×5) | 见 §2-D 测试锚点 | `tests/test_validation_runner.py` |
-| E (×2) | failure_class mapping + index/summary 集成 | `tests/test_exception_classifier.py`, `tests/test_index_writer.py`, `tests/test_batch_summary_writer.py` |
-| F (×4) | 见 §3.6 测试锚点 | `tests/test_validation_runner.py` |
+| E (×3) | `failure_class` mapping + index 集成 + summary 聚合 | `tests/test_exception_classifier.py`, `tests/test_index_writer.py`, `tests/test_batch_summary_writer.py` |
+| F 接线 (×5) | 见 §3.6 测试锚点(run_one_request 分支 + distill agent 路径)| `tests/test_validation_runner.py`, `tests/test_trial_runner_smoke.py` |
 | WR-01 | `test_stage3_fail_fast_drains_inflight` | `tests/test_validation_runner.py` |
 | WR-02 | `test_finally_writer_failure_does_not_mask_original` | `tests/test_validation_runner.py` |
 | WR-03 | N/A(纯删除,grep verify) | — |
 | WR-04 callsite | grep verify `_current_node_id as _cv` 不存在 | — |
-| WR-05 | `test_trial_runner_reraises_provider_errors` | `tests/test_trial_runner_smoke.py` |
-| IN-01 | `test_trial_outcome_token_cost_from_trace_usage` | `tests/test_trial_runner_smoke.py` |
+| WR-05 | `test_trial_runner_reraises_provider_errors`、`test_trial_runner_catches_schema_violation` | `tests/test_trial_runner_smoke.py` |
+| IN-01 | `test_trial_outcome_token_cost_from_trace_usage`、`test_trial_outcome_token_cost_zero_when_no_usage` | `tests/test_trial_runner_smoke.py` |
 | IN-08 | grep verify `_PROVIDER_BUDGET_KEY` 不存在 + `deepseek_provider_from_env(max_retries=3)` 在 runner 中 | — |
+| **行为度量 M1-M5** | `test_machine_judges_factor_diversity`、`test_machine_judges_copy_diversity`、`test_machine_judges_reflection_trigger_rate`、`test_machine_judges_delta_diversity`、`test_machine_judges_belief_update_count` | `tests/test_machine_judges.py`(新增 5 个 judge 函数 + 5 个测试) |
 
 **单元层验收:** `pytest -q` 在 phase-8 final commit 上 ≥ 当前 baseline(253),无 skipped 新测,无 xfail。
 
@@ -790,34 +934,130 @@ python -m seers_harness.validation.runner --env-file .env.local
 
 **Batch 输出位置:** `tests/smoke/.runs/<phase-8-ts>/`(git-ignored per D-09)。
 
-### 5.4 实测证据矩阵(逐 Deliverable × Stage × Pass Criterion)
+### 5.4 实测证据矩阵(逐 Deliverable × Pass Criterion)
 
-| Deliverable | Stage 中观察点 | 通过判据 |
+每个 deliverable 的实测证据分两栏:**Firing 证据**(模块跑了)+ **真阳性证据**(模块做对了)。若 batch 自然条件下未触发该路径,planner 标注"pytest 是唯一证据",**禁止伪造实测证据(D8-VAL-REAL)**。
+
+| Deliverable | Firing 证据 | 真阳性证据 |
 |---|---|---|
-| **A** 超时 180s | Stage 1 / 2 / 3 任一请求 | 任一 trace 的 `usage.json` 显示总耗时 60s-180s 且 `exception is null`(对照 0526 trace 在 60s 处死);若 *所有* 请求都 < 60s,A 项视为 *未在 batch 中 firing*(planner 应注解:此时单元测试是唯一证据)。 |
-| **B** 请求级 transient 重试 | Stage 2 或 3 任一请求 + 故障注入 1 个请求 | `.run-logs/runner-<ts>.log` 含 `transient (attempt N/3); backoff=Ns` 文本;若无自然 transient,必须有 1 个故障注入请求展示该路径(`index.json` 该 row `fault_inject=true`)。 |
-| **C** CR-05 审计 | 任一 stage 任一请求出现 tool_args 截断 | log 含 `parse_retry node=... attempt=N/M` 文本;最终该请求 (i) 成功 *或* (ii) `exception` 为 `ProviderResponseError` 路由 `provider_error` fail-fast。 |
-| **D** `--env-file` | Stage 1 启动 | log 前 2 行:`env-file: loaded N keys from .env.local` + `DEEPSEEK_API_KEY suffix=****<4chars>`;value 字符串不出现在 log 中。 |
-| **E** `failure_class` | 所有 stages 全部请求 | `index.json` 每行有 `failure_class` ∈ {ok, auth, rate_limit, transient, malformed_tool_args, schema_violation, runner_bug};`batch_summary.json` `by_failure_class` 各 value 之和 = `totals.requests`。 |
-| **F** evolution 接线 | 所有 stages 全部请求 | `evolution_snapshot.json` 含 `trials[]` 非空 *至少一个请求*;`trial_succeeded` 或 `trial_failed` event 存在;`record.trial_selected_delta_id == "phase-8-seed-001"`(或等价 patch-derived id)在 `index.json` 至少一行。 |
-| **WR-01** drain in-flight | Stage 3 fail-fast 时(若发生) | `len(index.json.requests) == 20`;disk 上 `stage3/<rid>/` 目录数 = 20。**若无 fail-fast,跳过,单测为唯一证据**。 |
-| **WR-02** best-effort finally | N/A 自然 batch 中难触发 | **单测为唯一证据**;实测 batch 失败时,日志中不出现 "flush_evidence failed" 行(若出现,说明 IN-04 fix 失效,新 finding)。 |
-| **WR-03** 删除 dup `_detect_delimiter` | N/A | grep:`_detect_delimiter` 在 `runner.py` 出现次数 = 0;`detect_delimiter`(无下划线)调用 = 1。 |
-| **WR-04 callsite** 公开 helper | N/A | grep:`_current_node_id as _cv` 在 `runner.py` 出现次数 = 0;`reset_current_node_id` import = 1。 |
-| **WR-05** trial 异常窄化 | Stage 2/3 trial 中,若 DeepSeek auth/rate 错误发生 | log 显示 `provider_error -> fail-fast`(via D-19 routing);**不应** 显示 `trial_failed` 类型为 `ProviderAuthError`(若显示,WR-05 fix 失效)。**若无自然 provider error,单测为唯一证据**。 |
-| **IN-01** token_cost_observed | F seed delta 触发的所有 trials | `evolution_snapshot.json` 中 `trials[*].token_cost_observed > 0` 至少一个请求。 |
-| **IN-08** max_retries kwarg | N/A | grep:`_PROVIDER_BUDGET_KEY` / `_PROVIDER_CTOR_KWARGS` 在 `runner.py` 出现次数 = 0;`deepseek_provider_from_env(max_retries=3)` 出现 = 1。 |
+| **A** 180s timeout | 任一请求 TTFB 60s-180s 且 `exception is null`(对照 0526 trace 在 60s 处死)| `usage.json.completion_tokens` non-trivial(实际跑完 reasoning model),不是"刚好踩 180s 又被推 transient retry 挡住" |
+| **B** tool_loop backoff | `.run-logs/runner-<ts>.log` 若有自然 transient → 该请求出现 `ProviderTransientError` 后下一个 turn 仍成功(隐含 sleep 生效)| 用户决定 Q3 = B:**不在 batch 中混故障注入**;无自然 transient 时 pytest 4 路径单测为唯一证据 |
+| **C** CR-05 审计 | 任一 stage 任一请求出现 tool_args 截断 → log 含 `parse_retry node=... attempt=N/M`| 最终该请求 (i) 成功 *或* (ii) `exception=ProviderResponseError` + `failure_class=malformed_tool_args` |
+| **D** `--env-file` | log 前 2 行:`env-file: loaded N keys from .env.local` + `DEEPSEEK_API_KEY suffix=****<4chars>`| value 字符串不出现在任何 stderr / artifact / index.json;`DEEPSEEK_API_KEY` 后 4 字符与 `.env.local` 一致(对照 0526 ****92c7 stale-env 401)|
+| **E** `failure_class` | 每个 `index.json` row 含 `failure_class`;`batch_summary.json.by_failure_class` 之和 = `totals.requests`| 7 个枚举中 *每个* 在 batch 出现过(自然多样性 + IN-04 后 schema/runner_bug 应当稀少);若一个枚举 0 次,planner 在 batch 报告中标"枚举完备性待后续 batch 验证",非阻塞 |
+| **F** evolution wiring | (1) Stage 1 后日志含 `node=distill_after_stage1` tool_loop_summary;(2) `delta_portfolio` 在 Stage 1 结束时 ≥ 1 row;(3) Stage 2/3 至少一个 `evolution_snapshot.json` 含非空 `trials[]`| `trial.delta_id` 来自 distill artifact(不是 hardcoded);trial outcome `success`/`failure_category` non-default;**M4 + M5 双重把关**(见 §5.4b)|
+| **WR-01** drain in-flight | IF Stage 3 fail-fast 自然发生:`len(index.json.requests) == 20`,`stage3/<rid>/` 目录数 == 20| 无 fail-fast 时 pytest 是唯一证据 |
+| **WR-02** finally best-effort | N/A(IN-04 后罕见)| 实测 batch 中不出现 `flush_evidence failed` 或 `write_evolution_snapshot failed` 日志行(出现 = IN-04 失效,新 finding)|
+| **WR-03** 删除 dup `_detect_delimiter` | grep:`_detect_delimiter` 在 `runner.py` 出现次数 = 0,`detect_delimiter` 调用 = 1| N/A pure cleanup |
+| **WR-04 callsite** | grep:`_current_node_id as _cv` 在 `runner.py` 出现次数 = 0,`reset_current_node_id` import = 1| N/A pure cleanup |
+| **WR-05** trial 异常窄化 | IF trial 期间 DeepSeek auth/rate 错误自然发生:log 显示 `provider_error -> fail-fast`,**无** `trial_failed` 事件携带 provider exception class| 无 provider error 时 pytest 单测为唯一证据(M4 间接验证:trial 跑通就说明 narrow 不误伤)|
+| **IN-01** token_cost_observed | F seed delta 触发的 trials 中 `token_cost_observed > 0` 至少一个请求 | M4 中"trial 与 baseline 的 token_cost_observed 差异 ≠ 0"间接验证(M4 也涵盖此 deliverable)|
+| **IN-08** max_retries kwarg | grep:`_PROVIDER_BUDGET_KEY` 在 `runner.py` 出现次数 = 0;`deepseek_provider_from_env(max_retries=3)` 出现 = 1| N/A pure cleanup |
+
+### 5.4b 行为度量 — 真阳性验收的 5 个 metric(用户 2026-05-27 锁定)
+
+> 用户对 RESEARCH 原版"trials[] 非空 + token_cost > 0"的真阳性边界提出加强要求(2026-05-27):
+> "*挖掘真的能调用 tool 挖掘出足够数量的多角度的个性化,文案生产真的能产出多样化文案,在模型偷懒时真的通过工具反思避免偷懒。进化机制真的在工作,比如 hook 机制触发的好,真的有 delta 产出且有整个流程。*"
+>
+> 这 5 个 metric 在 `seers_harness/validation/machine_judges.py` 新增 5 个 judge 函数实现,由 `batch_summary.json` 报告。**任一未达阈值 = phase 8 触发 user review,不自动 pass**。所有计算都是 *算法*(set 操作、Jaccard、计数),零启发式 if/elif。
+
+**M1 — 挖掘多样性 `factor_count_p50` ≥ 3**
+
+- **判据:** `factor_discovery/artifact.json` 中 `factors` 数组长度,phase-8 batch 全请求的 p50。
+- **算法:** `statistics.median([len(d.factors) for d in all_factor_artifacts])` ≥ 3。
+- **失败语义:** 模型偷懒只产 1-2 个 factor 是假阳性(挖掘"成功"但没真正多角度)。
+- **阈值依据:** RESEARCH 推荐值 3,用户 2026-05-27 接受。
+
+**M2 — 挖掘角度分布 `factor_diversity_score` ≥ 0.5**
+
+- **判据:** Phase-8 batch 中所有 factor 的 `covers_product_ids` 集合两两 Jaccard 距离的均值 + `transferable_disposition` token-level 离散度(Jaccard distance)。
+- **算法(`machine_judges.compute_factor_diversity`):**
+  ```python
+  def compute_factor_diversity(all_artifacts: list[dict]) -> float:
+      ids_sets = [frozenset(f["covers_product_ids"]) for d in all_artifacts for f in d["factors"]]
+      texts = [_tokenize(f["transferable_disposition"]) for d in all_artifacts for f in d["factors"]]
+      if len(ids_sets) < 2: return 0.0
+      ids_distance = mean(1 - len(a & b)/len(a | b) for a, b in combinations(ids_sets, 2) if a or b)
+      text_distance = mean(1 - len(a & b)/len(a | b) for a, b in combinations(texts, 2) if a or b)
+      return (ids_distance + text_distance) / 2
+  ```
+- **失败语义:** 所有 factor 都是同一角度(高 token 重叠)= 模型用模板填充,挖掘失败。
+- **阈值依据:** 0.5 = "平均 50% token 不重叠",是较弱真阳性边界(挖掘真正分散);用户 2026-05-27 接受 RESEARCH 推荐。
+
+**M3 — 文案多样性 + 反思触发率(合并 metric)**
+
+- **判据 M3a `copy_candidate_count_p50` ≥ 2:** `copy_generation/artifact.json.considered_drafts` 数组长度 phase-8 batch p50 ≥ 2。
+- **判据 M3b `reflection_triggered_when_underspec_rate` ≥ 0.8:** 当 `factor_count < 3` 时,该请求的 `tool_calls.jsonl` 应该出现 `reflect_on_coverage` 或 `reflect_on_diversity` 调用。"当 factor 不足时反思触发"的比率 ≥ 80%。
+- **算法:**
+  ```python
+  def compute_copy_diversity(all_artifacts: list[dict]) -> float:
+      return statistics.median([len(d["considered_drafts"]) for d in all_artifacts])
+
+  def compute_reflection_trigger_rate(per_request: list[tuple[int, list[str]]]) -> float:
+      """per_request: list of (factor_count, [tool_names called in factor_discovery node]) tuples"""
+      underspec = [tools for fc, tools in per_request if fc < 3]
+      if not underspec: return 1.0  # 没有 underspec 请求,trivially pass
+      triggered = sum(1 for tools in underspec if any(t.startswith("reflect_") for t in tools))
+      return triggered / len(underspec)
+  ```
+- **失败语义 M3a:** 单一 candidate = 模型偷懒,没真正生 multi-draft。
+- **失败语义 M3b:** factor 不足时不触发反思 = mirror 机制失效,文案直接基于不足 factor 生成。
+- **阈值依据:** M3a = 2(用户 2026-05-27 接受);M3b = 0.8(用户接受,允许 20% 漏触发为 batch 噪声)。
+
+**M4 — 演化 delta 多样性 `delta_diversity_score` > 0(开放,non-trivial)**
+
+- **判据:** distill agent 在 Stage 1 后产出的 `DeltaProposal[]` 中:
+  - count ≥ 1(agent 真的产 delta);
+  - 若 count ≥ 2:`target_skill` 不全相同(覆盖 ≥ 2 个 skill)*或* `change_type` 不全相同。
+- **算法:**
+  ```python
+  def compute_delta_diversity(proposals: list[DeltaProposal]) -> dict:
+      return {
+          "count": len(proposals),
+          "unique_targets": len({p.target_skill for p in proposals}),
+          "unique_change_types": len({p.change_type for p in proposals}),
+      }
+  ```
+- **失败语义:** 0 proposals = distill agent 没真正工作。1 proposal + 后续 batch 都同 skill = 演化 chain 只动一个面。
+- **阈值依据:** count ≥ 1 hard 阈值(否则 ACC-2 失败);unique_targets ≥ 2 OR unique_change_types ≥ 2 当 count ≥ 2 时作为软阈值,batch 报告内告警但不阻塞(Stage 1 单一 trace 产单一目标 delta 是 *可能的合理结果*)。
+
+**M5 — 演化 belief 更新 `trial_belief_update_count` > 0**
+
+- **判据:** Stage 2/3 完成后,portfolio 至少一个 row 的 `sample_count` > 0(`update_after_trial` 真的折回 outcome,不是只跑 trial 不更新)。
+- **算法:**
+  ```python
+  def compute_belief_update_count(final_portfolio: list[DeltaPortfolioRow]) -> int:
+      return sum(1 for row in final_portfolio if row.sample_count > 0)
+  ```
+- **失败语义:** trial 跑了但 portfolio 没动 = `update_after_trial` 调用点缺失,演化 chain 断开。
+- **阈值依据:** > 0 hard 阈值,这是"全链路"的最后一环。
+
+**M1-M5 实现位置:** `seers_harness/validation/machine_judges.py`(已存在 VAL-01/02/04 模式),新增 5 个 `compute_*` 函数 + 1 个 `build_behavioral_report(stage_dir)` aggregator,写入 `batch_summary.json.behavioral_metrics` 字段。所有计算 *仅* 读取 `index.json` / `evidence/<node>/artifact.json` / `evidence/<node>/tool_calls.jsonl` —— 不调 LLM,纯算术。
+
+**M1-M5 阈值汇总 + 阻塞规则:**
+
+| Metric | 阈值 | 阻塞? | 用户决定来源 |
+|---|---|---|---|
+| M1 factor_count_p50 | ≥ 3 | **阻塞** | 2026-05-27 RESEARCH 推荐接受 |
+| M2 factor_diversity_score | ≥ 0.5 | **阻塞** | 2026-05-27 RESEARCH 推荐接受 |
+| M3a copy_candidate_count_p50 | ≥ 2 | **阻塞** | 2026-05-27 RESEARCH 推荐接受 |
+| M3b reflection_triggered_when_underspec_rate | ≥ 0.8 | **阻塞** | 2026-05-27 RESEARCH 推荐接受 |
+| M4 delta_diversity_score.count | ≥ 1 | **阻塞** | 2026-05-27 用户"hook 机制触发的好,真的有 delta 产出" |
+| M4 delta_diversity_score.unique_* | count ≥ 2 时 ≥ 2 | 软告警 | RESEARCH 折衷 |
+| M5 trial_belief_update_count | > 0 | **阻塞** | 2026-05-27 用户"真的有 delta 产出且有整个流程" |
+
+**阻塞机制:** 在 `08-VERIFICATION.md` 模板的 acceptance gate 中加一条:"M1-M5 全部达阈值 OR 软告警可解释"。Phase 8 的 verifier 读 `batch_summary.json.behavioral_metrics`,任一阻塞 metric 未达 = phase 8 状态 `gaps_found`,user review 决定是否接受 / 重跑 / 修代码后重跑。**这是 *user 决策*,不是自动 pass。**
 
 ### 5.5 实测层验收闸门
 
 - **D8-ACC-1:** 一次 Stage 1+2+3 batch 在 *单一* phase-8 commit 上 end-to-end 完成,零请求因 60s/stale-env/未处理 transient 而 fail-fast。
-- **D8-ACC-2:** `evolution_snapshot.json` 含 ≥ 1 个非空 `trials[]`(F 接线证据)。
-- **D8-ACC-3:** `index.json` 每行有 `failure_class`;`batch_summary.json` `by_failure_class` 完整。
-- **D8-ACC-4:** `pytest -q` 全套通过(单元+集成层 §5.1 + §5.2)。
+- **D8-ACC-2:** `evolution_snapshot.json` 含 ≥ 1 个非空 `trials[]`(F 接线 firing 证据;真阳性证据见 M4 + M5)。
+- **D8-ACC-3:** `index.json` 每行有 `failure_class`;`batch_summary.json.by_failure_class` 完整。
+- **D8-ACC-4:** `pytest -q` 全套通过(单元+集成层 §5.1 + §5.2);新增 M1-M5 单测全绿。
 - **D8-ACC-5:** `07-WRIN-TRIAGE.md` 7 个 scheduled 项目移至 phase-8 commit ref。
-- **D8-ACC-6:** `08-VERIFICATION.md` 状态 `passed`。
+- **D8-ACC-6:** `08-VERIFICATION.md` 状态 `passed`,**含 M1-M5 全部达阈值或 user 显式接受软告警**。
 
-任一 deliverable 在 §5.4 矩阵中没有可验证证据 = phase 8 仍 reopen。
+任一 deliverable 在 §5.4 矩阵中没有可验证证据,**或** M1-M5 任一阻塞 metric 未达,= phase 8 仍 reopen。
 
 ---
 
@@ -945,43 +1185,45 @@ python -m seers_harness.validation.runner --env-file .env.local
 
 | # | 项 | 文件 | 是否需要 commit 一起? |
 |---|---|---|---|
-| 1 | A | `openai_compatible.py` | 单独 |
-| 2 | D | `runner.py`(main + load helper)| 单独 |
-| 3 | E | `exception_classifier.py` + `runner.py` + `index_writer.py` + `batch_summary_writer.py` | 单独 |
-| 4 | WR-03 | `runner.py` | 单独 |
-| 5 | WR-04-callsite | `runner.py` | 单独(可与 WR-03 合并) |
-| 6 | IN-08 | `runner.py` | 单独(可与 WR-03/WR-04 合并为"runner 清理三件套") |
-| 7 | F | `runner.py`(主接线)| 单独,大 commit |
-| 8 | IN-01 | `trial_runner.py` | 紧跟 F |
-| 9 | B | `runner.py`(transient retry wrapper)| 单独 |
-| 10 | WR-01 | `runner.py`(Stage 3 drain)| 单独 |
-| 11 | WR-02 | `runner.py`(finally best-effort)| 单独 |
-| 12 | WR-05 | `trial_runner.py` | 单独 |
-| — | C 审计 | 跑一次实测 batch,读 log | 不产生代码 commit(除非加 parse_retry log)|
+| 1 | A | `openai_compatible.py`(timeout 默认值)| 单独 |
+| 2 | D | `runner.py`(main + `_load_env_file`)| 单独 |
+| 3 | E | `exception_classifier.py`(`failure_class` 函数)+ `runner.py`(record 字段)+ `index_writer.py` + `batch_summary_writer.py` | 单独 |
+| 4 | WR-03 | `runner.py`(删除 dup `_detect_delimiter`)| 单独(可与 WR-04/IN-08 合并)|
+| 5 | WR-04-callsite | `runner.py`(改用 `reset_current_node_id`)| 同上 |
+| 6 | IN-08 | `runner.py`(`max_retries` kwarg)| 同上 — "runner 清理三件套" |
+| 7 | F 接线 | `runner.py`(`_run_one_request` + `_run_stage` + `run` + `_distill_after_stage1`)+ `_patch_from_portfolio_row` helper | 单独,大 commit |
+| 8 | IN-01 | `trial_runner.py`(token_cost_observed 写入)| 紧跟 F |
+| 9 | M1-M5 行为度量 | `machine_judges.py`(5 个 `compute_*` + `build_behavioral_report`)+ `batch_summary_writer.py`(append 字段)| 紧跟 IN-01(在 IN-01 之后,因为 M5 依赖 portfolio 更新 + IN-01 的 token_cost)|
+| 10 | B | `tool_loop.py`(已有 retry 点加 backoff)| 单独;**注意:不修 runner.py**,这是关键审美约束 |
+| 11 | WR-01 | `runner.py`(Stage 3 fail-fast drain)| 单独 |
+| 12 | WR-02 | `runner.py`(finally best-effort wrap)| 单独 |
+| 13 | WR-05 | `trial_runner.py`(narrow `except Exception`)| 单独 |
+| — | C 审计 | 跑实测 batch,读 log | 不产生代码 commit(除非 audit log 行需要补 → 在 §2-C 标注的"附带修改")|
 
-总计:11-12 个 commit + 1 个审计步骤 = 12-13 个原子 commit,符合 GSD 原子 commit 规范。
+总计:13 个原子 commit + 1 个审计步骤,符合 GSD 原子 commit 规范。
 
 ### 7.3 风险缓解
 
-- **大 commit 风险(F):** F 接线是单 commit 中最大的改动。Planner 应在 F 的 PLAN 中拆分 task 但保持单 commit —— 接线 + 单测在同一个 commit。如果需要拆,拆为"(F-1) 添加 seed delta + portfolio 构造","(F-2) `_run_one_request` 接线","(F-3) `_run_stage` 调用点更新"三个 commit,但三者无 IN-01 token cost 接入会让 F-1/F-2/F-3 各自的实测无意义 —— **推荐保持 F 单 commit + IN-01 紧随**。
+- **大 commit 风险(F):** F 接线是单 commit 中最大的改动。Planner 应在 F 的 PLAN 中拆分 task 但保持单 commit —— 接线 + 单测在同一个 commit。如果需要拆,拆为"(F-1) `_distill_after_stage1` + `_build_trajectory_payload`","(F-2) `_run_one_request` 接线 trial loop + `_patch_from_portfolio_row`","(F-3) `_run_stage` 调用点更新 + run() 装配"三个 commit。这三者互相支撑,无 IN-01 token cost 接入会让 M4/M5 后续验证缺数据,**推荐保持 F 单 commit + IN-01 + M1-M5 紧随**。
+- **B 项粒度风险:** B 落在 `tool_loop.py` 而非 `runner.py`,这意味着影响面 *扩大* 到所有 `run_skill_via_tools` 调用点(`dag_runner` + `_distill_after_stage1`)。这是 *好事* —— 整个 harness 的 transient retry 都获得 backoff,不只 runner。但要确认没有现有调用点假设无 backoff 行为(grep `run_skill_via_tools` 调用点,无 sleep mock 期望即可)。
 
 ---
 
-## 8. 未决问题 / 推荐问询用户
+## 8. 未决问题(2026-05-27 已 resolve)
 
-≤ 3 项,planner 应在 PLAN 写入前请用户 confirm:
+原 §8 的 3 个 open questions 在用户 2026-05-27 kick-off 时全部锁定:
 
-1. **`SchemaError` 别名问题。** Charter 文本(§Group 1 E)写"`SchemaError → schema_violation`",但代码中没有名为 `SchemaError` 的类;实际 raise 的是 `pydantic.ValidationError`。**建议默认行动:** 在 `exception_classifier.failure_class` 中映射 `pydantic.ValidationError → "schema_violation"`,并在 PLAN 注释中标明这是 charter `SchemaError` 的 canonical 实现。**请用户确认或反对该映射。**
+1. **Q1 `SchemaError` 别名:** 锁定为 `pydantic.ValidationError`(`failure_class` 函数中 `isinstance(exc, pydantic.ValidationError) → "schema_violation"`)。
+2. **Q2 种子 delta:** 撤回 C3 hardcoded seed,**改 C4 — distill agent 在 Stage 1 后从真 trace 算法提取 delta,Stage 2/3 跑该 delta 的 trial**。完整闭环 distill → portfolio → trial → update_after_trial。
+3. **Q3 故障注入:** 选 B,**不在 phase-8 batch 中混故障注入请求**。B 项实测证据仅限自然 transient;无自然 transient 时 pytest 4 路径单测为唯一证据。
 
-2. **种子 delta 候选。** §3.4 推荐 C3(`generate-copy-candidates/SKILL.md` 前置 HTML 注释)。**请用户确认或指定其他 delta。** 如果用户偏好"真实 prompt-level 改动"(C2 类),planner 需要明确 *哪个 SKILL 的哪一句* 加什么,这超出 RESEARCH 阶段能锁定的细节。
-
-3. **故障注入要不要进入 phase-8 batch?** §2-B 实测证据要求建议 *如果* Stage 1+2+3 自然 batch 中没出现 transient,加 1 个 marker 为 `fault_inject=true` 的请求来 firing B 项路径。**请用户确认这种"在生产 batch 中混 1 个故障注入请求"的策略是否可接受**,或要求 phase 8 完全靠自然 transient 出现(若不出现就接受 B 项仅有单测证据)。
-
----
+新增的真阳性 5 个行为度量(M1-M5)+ 阻塞规则在 §5.4b 锁定。Planner 不再需要询问用户即可写 PLAN。
 
 ## RESEARCH COMPLETE
 
 - 文件已写到 `.planning/phases/08-evolution-wiring-and-runner-debt/08-RESEARCH.md`,8 大节齐全(含 `## Validation Architecture` 让步骤 5.5 触发)。
-- Group A-E + F + G(7 个 WR/IN)所有 deliverable 都精确到 file:line,伪代码就位;实测证据矩阵逐项给出可 grep / 可 read 的判据。
-- 测序复核发现一处微调:IN-01 必须紧随 F(charter 写的位置太晚),已在 §7.2 给出 12 commit 推荐序。
-- 3 项待用户确认:(a)`SchemaError == pydantic.ValidationError` 别名;(b)种子 delta C3 选择;(c)故障注入请求是否计入 phase-8 batch。
+- Group A-E + F + G(7 个 WR/IN)所有 deliverable 都精确到 file:line,伪代码就位。**B 项重构:** 落在 `tool_loop.py` 已有 retry 点上加 backoff,不在 runner.py 外起 wrapper(避免多层嵌套 + finally 重复 flush)。
+- **F 项 C4 路径锁定:** distill agent 在 Stage 1 后跑 `run_skill_via_tools(skill="distill-skill-deltas", ...)` 从真 trace 提 delta,Stage 2/3 trial。完整闭环。零 hardcoded seed。
+- **新增 5 个行为度量(M1-M5)阻塞验收:** factor 多样性 / 文案 multi-draft / 偷懒时反思触发率 / delta 多样性 / belief 更新计数。算法实现(Jaccard、median、计数),零启发式。
+- 测序复核:F 之后 IN-01,IN-01 之后 B,B 之后 WR-01/02/05。Planner 用此序写 PLAN(11-12 commit)。
+- 用户的 3 个 Q 全部已 resolve;§8 已更新。Planner 可直接写 PLAN。
