@@ -1,96 +1,94 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-27T06:45:59.441Z",
+  "timestamp": "2026-05-27T17:20:14.245Z",
   "phase": "08",
   "phase_name": "evolution-wiring-and-runner-debt",
   "phase_dir": ".planning/phases/08-evolution-wiring-and-runner-debt",
-  "plan": 1,
+  "plan": "gap-closure",
   "task": 0,
-  "total_tasks": 13,
+  "total_tasks": 6,
   "status": "paused",
   "completed_tasks": [
-    {
-      "id": 0,
-      "name": "Phase 8 planning package",
-      "status": "done",
-      "commit": "2d8c6e6",
-      "progress": "Charter, context, research, validation strategy, and 13 execute plans are written. No phase-8 implementation summaries exist yet."
-    }
+    {"id": "08-01..08-11", "name": "Phase-8 production-side hardening + cleanup (timeout/env-file/failure_class/runner-cleanup/wiring/IN-01/M1-M5/backoff/drain/finally/narrow)", "status": "done", "commit": "3e6965b"},
+    {"id": "pre-batch-fix", "name": "request_preprocessor module-level hoist", "status": "done", "commit": "cbb6c5e"},
+    {"id": "real-llm-batch", "name": "Phase-8 real-LLM batch on cbb6c5e — Stage 1 PASSED, Stage 2 10/20 done, SIGTERM at STOP B (zero trials)", "status": "done", "commit": "224a91a"},
+    {"id": "F-08-A", "name": "25 personalization angles derived bottom-up from 11 user payloads", "status": "done", "commit": "224a91a"},
+    {"id": "F-08-B", "name": "Root cause: dag_runner.py:84 skill_bundle=\"SKILL_BODY\" literal — 3 production nodes naked", "status": "done", "commit": "224a91a"},
+    {"id": "F-08-C", "name": "Root cause: copy_payload_for strips user_state; cache_miss=120 tokens at copy_generation", "status": "done", "commit": "224a91a"},
+    {"id": "F-08-D", "name": "Delta mechanism redesign: orphan map of 06-02 functions + 6 gap-closure plans 09-01..09-06 with real bandit / Wilson LCB / journal-then-fold / paired-control uplift", "status": "done", "commit": "224a91a"}
   ],
   "remaining_tasks": [
-    {"id": 1, "name": "08-01 D8-A timeout default 60s to 180s", "status": "not_started"},
-    {"id": 2, "name": "08-02 D8-D runner --env-file", "status": "not_started"},
-    {"id": 3, "name": "08-03 D8-E failure_class index and summary aggregation", "status": "not_started"},
-    {"id": 4, "name": "08-04 WR-03 / WR-04 callsite / IN-08 cleanup", "status": "not_started"},
-    {"id": 5, "name": "08-05 D8-F evolution wiring and distill delta source", "status": "not_started"},
-    {"id": 6, "name": "08-06 IN-01 token_cost_observed from runtime trace usage", "status": "not_started"},
-    {"id": 7, "name": "08-07 M1-M5 behavioral metrics", "status": "not_started"},
-    {"id": 8, "name": "08-08 D8-B transient backoff in tool_loop", "status": "not_started"},
-    {"id": 9, "name": "08-09 WR-01 Stage 3 fail-fast drain", "status": "not_started"},
-    {"id": 10, "name": "08-10 WR-02 finally best-effort writers", "status": "not_started"},
-    {"id": 11, "name": "08-11 WR-05 trial_runner exception narrowing", "status": "not_started"},
-    {"id": 12, "name": "08-12 D8-C CR-05 audit after real batch", "status": "not_started"},
-    {"id": 13, "name": "08-13 closeout 07-WRIN-TRIAGE.md and 08-VERIFICATION.md", "status": "not_started"}
+    {"id": "08-G1", "name": "SKILL loader unification — single harness primitive (the binding to fixed nodes is an extension class/hook, NOT hardcoded in dag_runner)", "status": "not_started"},
+    {"id": "08-G2", "name": "Context disclosure boundary research + fix — copy_payload_for / rubric_payload_for; treat as information-theoretic problem (cache-hit vs information density), not blanket whitelist", "status": "not_started"},
+    {"id": "08-G3", "name": "Distill-skill-deltas dual-track success/failure mining + target_skill format contract (3 sites)", "status": "not_started"},
+    {"id": "08-G4", "name": "Replace deterministic loop with select_trial_delta + ProductionSignalWindow + paired control + journal-then-fold (F-08-D 09-01..09-05 condensed into phase-8 gap-closure)", "status": "not_started"},
+    {"id": "08-G5", "name": "Re-run real-LLM batch — Stage 1 + Stage 2 + Stage 3 (Stage 3 c=20 is closest to production; one-shot validation of all fixes)", "status": "not_started"},
+    {"id": "08-13-closeout", "name": "07-WRIN-TRIAGE.md + 08-VERIFICATION.md", "status": "not_started"}
   ],
   "blockers": [
     {
-      "description": "Phase 7 acceptance is reopened and blocked until phase 8 lands and a real DeepSeek Stage 1+2+3 batch runs cleanly.",
+      "description": "F-08-B (dag_runner SKILL loader missing) blocks the entire pipeline — no skill prose reaches LLM nodes. Must fix before any further evolution work has signal.",
       "type": "technical",
-      "workaround": "Do not relaunch phase 7 on the current code. Execute phase 8 first."
+      "workaround": "08-G1 fix lifts this; F-08-A/C/D all become actionable after 08-G1 lands."
     },
     {
-      "description": "Phase 8 acceptance cannot rely on smoke tests or FakeProvider-only evidence.",
-      "type": "external",
-      "workaround": "Collect real DeepSeek evidence on the final phase-8 commit per 08-VALIDATION.md."
+      "description": "F-08-C (copy_payload_for strips user_state) compounds with F-08-B — even with SKILL prose, copy node sees only 120 tokens of new info. Must NOT be solved by blanket whitelist; treat as cache-density problem.",
+      "type": "technical",
+      "workaround": "08-G2 research first (information-theoretic boundary), implement second."
     }
   ],
   "human_actions_pending": [
     {
-      "action": "Provide or confirm .env.local with a valid DEEPSEEK_API_KEY before the real-LLM batch.",
-      "context": "Plan 08-02 adds --env-file, and final acceptance requires launching via --env-file .env.local without shell export.",
-      "blocking": false
-    },
-    {
-      "action": "After phase 8 evidence lands, perform user-only case_analysis.md F1..F4 and VAL-03/VAL-06 verdicts.",
-      "context": "D-13/D-14 keep qualitative case reading outside execute-phase automation.",
+      "action": "Confirm 08-G1 / 08-G2 design before implementation begins (loader shape; context disclosure boundary research outcome).",
+      "context": "User explicitly said skills loader must be a single harness primitive (NOT hardcoded), context disclosure must research cache-hit vs information density before writing the fix.",
       "blocking": false
     }
   ],
   "decisions": [
     {
-      "decision": "Phase 8 is the active work context.",
-      "rationale": "Argument '08' plus latest planning files and git history show phase 8 planning is finalized and implementation has not started.",
+      "decision": "Gap-closure stays inside phase 08, no phase 09. Findings F-08-A..D drive 08-G1..G5 work.",
+      "rationale": "User explicit: \"不要开 phase 9，就在这个 phase 解决\".",
       "phase": "08"
     },
     {
-      "decision": "Start at 08-01-PLAN.md.",
-      "rationale": "No 08-xx-SUMMARY.md files exist, so all 13 phase-8 plans remain not started.",
+      "decision": "SKILL loader is a single harness primitive; the binding from fixed nodes to fixed skills is implemented as an extension class or hook on top of that primitive — not hardcoded literals.",
+      "rationale": "User explicit: \"skills loader 的机制必须统一为一个，我们所有的扩展都建立在基础的 harness 基建上\".",
       "phase": "08"
     },
     {
-      "decision": "Do not touch local dirty files while resuming phase 8.",
-      "rationale": "workflow-skills/current edits, .claude/scheduled_tasks.lock, .planning/config.json, and phase-7 .run-logs are unrelated or local/ephemeral.",
+      "decision": "Context disclosure (F-08-C fix) is an information-theoretic problem; before writing code, research the cache-hit / information-density boundary. Do not blanket-pass user_state.",
+      "rationale": "User explicit: \"context 的披露是不是可以仔细研究一下，可能和缓存命中也相关，信息量上过多或者少都是不可取的\".",
       "phase": "08"
     },
     {
-      "decision": "Real DeepSeek evidence is mandatory for acceptance.",
-      "rationale": "The user explicitly rejected smoke-test-only validation and requested root-cause diagnosis rather than surface-error patching.",
+      "decision": "SKILL prose must NOT contain the user's examples or analogies; instead the agent re-expresses the user's intent in unified, fluent terminology.",
+      "rationale": "User explicit: \"切忌在设计 skills 时把举例和比方写进去，正确做法是你理解我的意图随后用你认为更统一和通顺的词汇和说法来构筑\".",
+      "phase": "08"
+    },
+    {
+      "decision": "After fixes land, re-run real-LLM directly to Stage 3 (skip dedicated stage-1/2 re-validation runs; Stage 3 c=20 is closest to production and validates all fixes one-shot).",
+      "rationale": "User explicit: \"修复后直接跑 stage3，因为 stage3 是最接近生产实际的情景，可以一次性检验所有问题\".",
+      "phase": "08"
+    },
+    {
+      "decision": "Subagent dispatch for gap-closure execution must use opus / xhigh reasoning intensity.",
+      "rationale": "User explicit: \"按照 skills 需求派发 subagent 时应注意推理强度为 xhigh\". model=\"claude-opus-4-7\" passed to Agent() calls.",
+      "phase": "08"
+    },
+    {
+      "decision": "GSD orchestration drives this work — main agent orchestrates, dispatches gsd-* subagents per skill needs, runs end-to-end without stopping until Stage 3 batch completes.",
+      "rationale": "User explicit: \"按照 gsd 的流程来做这些事... 不要停止，直到 stage3 跑完\".",
       "phase": "08"
     }
   ],
   "uncommitted_files": [
-    "workflow-skills/current/discover-personalization-factors/SKILL.md",
-    "workflow-skills/current/generate-copy-candidates/SKILL.md",
-    "workflow-skills/current/personalized-copy-rubric-judge/SKILL.md",
-    ".claude/scheduled_tasks.lock",
-    ".planning/config.json",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner-20260526T174546Z.log",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner-20260526T174639Z.log",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner-20260526T183141Z.log",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner-20260527T024839Z.log",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner.log-path",
-    ".planning/phases/07-real-llm-validation/.run-logs/runner.pid"
+    "workflow-skills/current/discover-personalization-factors/SKILL.md (pre-existing dirty)",
+    "workflow-skills/current/generate-copy-candidates/SKILL.md (pre-existing dirty)",
+    "workflow-skills/current/personalized-copy-rubric-judge/SKILL.md (pre-existing dirty)",
+    ".claude/ (local, untracked)",
+    ".planning/config.json (local, untracked)",
+    ".planning/phases/07-real-llm-validation/.run-logs/ (untracked, ephemeral)"
   ],
-  "next_action": "Read .planning/phases/08-evolution-wiring-and-runner-debt/08-01-PLAN.md and execute Task 1 with TDD; do not skip the read_first list.",
-  "context_notes": "Phase 8 is a runner-touch sweep, not a phase-7 retry. The immediate code target starts with D8-A in seers_harness/provider_runtime/openai_compatible.py. The final gate remains real DeepSeek Stage 1+2+3 plus behavioral metrics M1-M5 and closeout docs."
+  "next_action": "Run /gsd-plan-phase 08 --gaps with findings F-08-A..D as input. Planner reads .planning/phases/08-evolution-wiring-and-runner-debt/findings/F-08-{A,B,C,D}*.md and produces 08-G1..G5 gap-closure plans. Then /gsd-execute-phase 08 --gaps-only with model=opus on subagents. After implementation lands and pytest is green, launch real-LLM batch directly to Stage 3.",
+  "context_notes": "Phase 8 is a runner-touch sweep that turned into a deeper investigation. The key shift: I previously saw F-08-01 (delta wiring broken) as the issue, but parallel investigations B/C/D showed F-08-01 is the symptom. F-08-B (LLM naked, no SKILL prose) is the deepest root cause — every observation about template copy, factor bimodality, low diversity flows from production nodes receiving 10-byte 'SKILL_BODY' literal instead of skill prose. F-08-C compounds it (no user_state at copy node). Once both fix, F-08-A's 25 angles become reachable and F-08-D's bandit/uplift mechanism has clean signal to work on. Don't fall into surface-patching — each fix must be at the architectural seam, not the line that raised the symptom. SKILL prose rewrite must use unified terminology, never the user's example phrases verbatim. Stage 3 c=20 batch is the acceptance gate."
 }
