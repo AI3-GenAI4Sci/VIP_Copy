@@ -297,4 +297,4 @@ candidate_bridge_logic:
 - **SKILL line 41 改写**: 同意 §3.3 改写文本
 - **cache_miss 目标区间**: [500, 5000] tokens
 
-Sign-off: pending
+Sign-off: 2026-05-28 (user approved field boundary, SKILL line 41 rewrite, cache_miss target band)
