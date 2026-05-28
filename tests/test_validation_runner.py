@@ -653,6 +653,10 @@ def test_select_trial_delta_gate_skips_when_signals_high(monkeypatch, tmp_path, 
     assert record["trial_selected_delta_id"] is None
     assert not (tmp_path / "portfolio_journal.jsonl").exists()
     assert "trial_skipped" not in capsys.readouterr().err
+    snapshot = _read_snapshot(tmp_path / "req-skip")
+    assert snapshot["trial_gate"]["selected_delta_id"] is None
+    assert snapshot["trial_gate"]["eligible_delta_count"] == 1
+    assert snapshot["trial_gate"]["trial_prob"] == 0.0
 
 
 def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_path):
@@ -690,6 +694,10 @@ def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_
     assert entries[0].delta_id == "D-live"
     assert entries[0].behavioral_metric_lift
     assert "val01_pass" in entries[0].behavioral_metric_lift
+    snapshot = _read_snapshot(tmp_path / "req-trial")
+    assert snapshot["trial_gate"]["selected_delta_id"] == "D-live"
+    assert snapshot["trial_gate"]["eligible_delta_count"] == 1
+    assert snapshot["trial_gate"]["trial_prob"] == 1.0
 
 
 def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):

@@ -664,6 +664,38 @@ def _artifact_behavioral_metrics(
     }
 
 
+def _trial_gate_event(
+    *,
+    portfolio: list[DeltaPortfolioRow],
+    applicable_surface: list[str],
+    recent_failure_rate: float,
+    token_budget_pressure: float,
+    production_pressure: float,
+    selected_delta_id: str | None,
+) -> dict[str, Any]:
+    rfr = max(0.0, min(1.0, recent_failure_rate))
+    tbp = max(0.0, min(1.0, token_budget_pressure))
+    pp = max(0.0, min(1.0, production_pressure))
+    eligible_count = sum(
+        1
+        for row in portfolio
+        if row.status == "experimental"
+        and (
+            not row.applicable_surface
+            or any(s in row.applicable_surface for s in applicable_surface)
+        )
+    )
+    return {
+        "type": "trial_gate",
+        "recent_failure_rate": rfr,
+        "token_budget_pressure": tbp,
+        "production_pressure": pp,
+        "trial_prob": (1.0 - rfr) * (1.0 - tbp) * (1.0 - pp),
+        "eligible_delta_count": eligible_count,
+        "selected_delta_id": selected_delta_id,
+    }
+
+
 def _run_one_request(
     *,
     request_id: str,
@@ -775,18 +807,32 @@ def _run_one_request(
         _record_host_baseline_outcome(record, runtime)
         with _inflight_lock:
             inflight = _inflight_count
+        applicable_surface = _applicable_surface_for(nodes, delta_portfolio)
+        recent_failure_rate = _signal_window.failure_rate()
+        token_budget_pressure = _signal_window.token_pressure(
+            budget_per_request=_DEFAULT_TOKEN_BUDGET_PER_REQUEST
+        )
+        production_pressure = concurrency_pressure(
+            inflight=max(0, inflight - 1),
+            max_concurrent=max_concurrent,
+        )
         selected_delta_id = select_trial_delta(
             portfolio=delta_portfolio,
-            applicable_surface=_applicable_surface_for(nodes, delta_portfolio),
-            recent_failure_rate=_signal_window.failure_rate(),
-            token_budget_pressure=_signal_window.token_pressure(
-                budget_per_request=_DEFAULT_TOKEN_BUDGET_PER_REQUEST
-            ),
-            production_pressure=concurrency_pressure(
-                inflight=max(0, inflight - 1),
-                max_concurrent=max_concurrent,
-            ),
+            applicable_surface=applicable_surface,
+            recent_failure_rate=recent_failure_rate,
+            token_budget_pressure=token_budget_pressure,
+            production_pressure=production_pressure,
             rng=_trial_rng,
+        )
+        events.append(
+            _trial_gate_event(
+                portfolio=delta_portfolio,
+                applicable_surface=applicable_surface,
+                recent_failure_rate=recent_failure_rate,
+                token_budget_pressure=token_budget_pressure,
+                production_pressure=production_pressure,
+                selected_delta_id=selected_delta_id,
+            )
         )
         if selected_delta_id is not None:
             portfolio_row = next(
