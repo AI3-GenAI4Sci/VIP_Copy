@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-27T11:16:47.547Z"
+last_updated: "2026-05-28T04:05:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 3
@@ -16,11 +16,11 @@ progress:
 
 ## Current Position
 
-Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING
-Plan: 1 of 13
+Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING, G5 gaps_found
+Plan: gap-closure recovery
 
-- Focus: phase 8 — runner-touch sweep that covers A-G in a single coherent change, then re-launch real-LLM Stage 1+2+3 on the phase-8 code.
-- Verified baseline: 253 workspace tests pass after CR-01..05 + 7 fix-now WR/IN commits (`pytest -q` green throughout 2026-05-27). No skips, no schema drift.
+- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batch `20260528T032645Z` failed.
+- Verified baseline: G1 committed; G2-G4 local implementation reported 377 tests passed, but the code and summaries are not yet in a clean GSD commit chain.
 - Code-review remediation: 4/4 Critical (CR-01..04) closed; CR-05 (parse-retry) closed `fc25187`; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
 - 2026-05-26 trajectory analysis confirmed `grep -rn "max_tokens"` returns 0 hits in source (D-06 honored) and max observed `completion_tokens` was 7019 — well under any cap. The truncation was DeepSeek-side stream cutoff, not a local budget.
 
@@ -34,10 +34,22 @@ Plan: 1 of 13
 | 4. SKILL.md Prose Rewrites | 1 | `04-SUMMARY.md` |
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
-| 7. Real-LLM Validation (REOPENED — blocked on phase 8) | 6 plans delivered + 11 fix-now commits (CR-01..05 + 7 WR/IN) | `07-01..06-SUMMARY.md`; `07-REVIEW.md` 4 Critical closed (`c2386a7`, `609020d`, `9810f85`, `2cd75a0`); CR-05 closed `fc25187`; 7 WR/IN closed-now per `07-WRIN-TRIAGE.md`; 7 WR/IN scheduled to phase 8; `07-VERIFICATION.md` status `gaps_found` after 2026-05-26 real-LLM batch surfaced 3 operational root causes (timeout/truncation/stale-env) |
-| 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening (STUB) | charter only | `08-CHARTER.md` — three groups: A-E phase-7 hardening (timeout 60→180s, transient retry, CR-05 audit, --env-file, failure_class), F evolution wiring, G 7 WR/IN runner-debt |
+| 7. Real-LLM Validation (REOPENED — blocked on phase 8) | 6 plans delivered + 11 fix-now commits (CR-01..05 + 7 WR/IN) | `07-WRIN-TRIAGE.md` now blocked again: 7 scheduled items cannot close until Phase 8 Stage 3 passes. |
+| 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening | G1 committed; G2-G4 local-done/uncommitted; G5 failed | `08-VERIFICATION.md` status `gaps_found`; batch `20260528T032645Z`; `08-G5-SUMMARY.md`. |
 
 ## Active Watchlist
+
+- **Phase 8 G5 failed (2026-05-28).** Real DeepSeek Stage 3 batch
+  `20260528T032645Z` stopped with `malformed_tool_args` at
+  `factor_discovery` request `-6833651210813617137`. `index.json` and
+  `batch_summary.json` exist; `portfolio_journal.jsonl` does not. Copy
+  cache-miss mean was 247.42, below signed [500,5000]; trials triggered 0
+  times. See `08-VERIFICATION.md`.
+
+- **GSD recovery required.** G2-G4 code and SUMMARY files exist locally but are
+  not represented by a clean task/summary commit chain. New tests under
+  `tests/` are ignored by `.gitignore`; preserve them with explicit `git add -f`
+  only if they are intentionally part of recovery.
 
 - **07-06 PARTIAL accepted (2026-05-27).** Stage 2 req2 fail-fasted on DeepSeek-side malformed `tool_call.arguments` JSON (truncation at char 3617 mid-string in a factor's `evidence_refs.path`). The runner's D-01/D-02/D-07/D-09/D-12/D-17/D-18/D-19/D-22 contracts held end-to-end. User explicitly accepted this outcome as a legitimate real-LLM behavioural finding (not a runner defect). The 2 successful captures plus 1 partial-on-fail-fast capture are the phase-7 evidence basis; `case_analysis.md` is the next user-driven step (outside execute-phase per D-13/D-14).
 
@@ -119,38 +131,28 @@ Plan: 1 of 13
 
 ## Resume Instruction
 
-Phase 7 is reopened but BLOCKED on phase 8. The 2026-05-26 real-LLM batch (`tests/smoke/.runs/20260526T183142Z/`) surfaced three operational root causes that prevent a clean Stage 1+2+3 re-run on the current code. Phase 8 batches their fix with the runner ↔ evolution wiring and the 7 phase-7 WR/IN runner-debt items. Re-launching real-LLM on the current code would just hit the same failures.
+Phase 7 remains blocked on Phase 8. Phase 8 reached G5 but real DeepSeek Stage
+3 failed and cannot be accepted.
 
 **Next-action sequence (resume here):**
 
 ```bash
 
-# 1. Read the phase-8 charter — three groups (A-E hardening, F wiring, G WR/IN debt)
+# 1. Read current recovery evidence
+$EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-VERIFICATION.md
+$EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-G5-SUMMARY.md
+$EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/.run-logs/g5-verification-20260528T032645Z.txt
 
-$EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-CHARTER.md
+# 2. Repair/supersede G2-G4 local-done/uncommitted commit-chain anomaly.
 
-# 2. Open the WIP doc updates queued at pause-time:
+# 3. Fix Stage 3 gaps, rerun tests, then rerun real Stage 3:
+.venv/bin/python -m pytest -q
+.venv/bin/python -u -m seers_harness.validation.runner --env-file .env.local --stage 3
 
-#    - 07-VERIFICATION.md frontmatter (trajectory root causes)
-
-#    - 07-UAT.md (current 15-test facts)
-
-#    - case_analysis_template.md (trajectory-level reading, NOT stats)
-
-# 3. Once phase-8 lands and pytest is green:
-
-#    - Re-launch real-LLM Stage 1+2+3 on the phase-8 commit using
-
-#      the runner's new --env-file flag (no shell ENV indirection)
-
-python -m seers_harness.validation.runner --env-file .env.local
-
-# 4. Then case_analysis.md F1..F4 + VAL-03/06 user verdicts (D-13/D-14)
-
-$EDITOR .planning/phases/07-real-llm-validation/case_analysis.md
+# 4. Only after automated gates pass, perform G5 user spot-check and close WRIN.
 ```
 
-The next execute-phase invocation should drive phase 8 (charter is the input). Phase 7 acceptance gate stays open until: (a) Stage 1+2+3 lands clean on phase-8 code; (b) `evolution_snapshot.json` carries non-empty `trials[]`; (c) case_analysis F1..F4 are user-judged excellent; (d) `07-WRIN-TRIAGE.md` 7 scheduled items move to phase-8 commit references.
+The next invocation should drive Phase 8 recovery. Phase 7 acceptance gate stays open until Stage 3 passes, `evolution_snapshot.json` carries non-empty `trials[]`, case analysis/user spot-check passes, and `07-WRIN-TRIAGE.md` moves the 7 scheduled items to real phase-8 commit references.
 
 Phase report: `workspace/.planning/phases/07-real-llm-validation/07-VERIFICATION.md` (status `gaps_found`).
 Plan summaries: `workspace/.planning/phases/07-real-llm-validation/07-0{1..6}-SUMMARY.md`.

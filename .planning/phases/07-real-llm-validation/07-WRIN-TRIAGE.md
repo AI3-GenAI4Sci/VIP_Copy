@@ -4,15 +4,15 @@ artefact: WR/IN code-review triage
 source: 07-REVIEW.md (lines 142-316)
 created: 2026-05-27T02:30:00Z
 last_updated: 2026-05-27T02:55:00Z
-status: closed (commits landed; remainder scheduled to phase 8)
+status: blocked (phase 8 Stage 3 acceptance failed; scheduled items not closed)
 items_total: 14
 items_fixed: 7
 items_waived: 0
 items_scheduled: 7
-items_open: 0
+items_open: 7
 ---
 
-# Phase 7: WR / IN Triage — closed
+# Phase 7: WR / IN Triage — blocked on Phase 8 acceptance
 
 User direction received 2026-05-27 (`go` after the three-decision-point
 status). Disposition path: **Option 3** — phase 7 finalises evidence-layer
@@ -56,3 +56,9 @@ evolution wiring (the phase-8 charter).
 - 2026-05-27T02:55:00Z — closed. 7 atomic commits landed; remaining 7
   scheduled to phase 8. `pytest -q` 253/253 throughout. No runner.py
   changes (preserves the in-flight batch on PID 98270).
+- 2026-05-28T04:05:00Z — reopened/blocked for closeout accuracy.
+  Phase 8 G5 real DeepSeek Stage 3 batch `20260528T032645Z` failed with
+  `malformed_tool_args` before acceptance. The seven scheduled runner-touch
+  items must not be marked closed until a clean Phase 8 commit chain exists
+  and a new Stage 3 acceptance run passes. Evidence:
+  `.planning/phases/08-evolution-wiring-and-runner-debt/08-VERIFICATION.md`.
