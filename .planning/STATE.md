@@ -20,7 +20,7 @@ Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING, G5 gaps_found
 Plan: gap-closure recovery
 
 - Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batch `20260528T032645Z` failed.
-- Verified baseline: G1 committed; G2-G4 local implementation reported 377 tests passed, but the code and summaries are not yet in a clean GSD commit chain.
+- Verified baseline: G1 committed; G2-G4 recovery committed in `ca1ea21` with summaries closed in `c98989e`; full local suite now reports 381 tests passed.
 - Code-review remediation: 4/4 Critical (CR-01..04) closed; CR-05 (parse-retry) closed `fc25187`; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
 - 2026-05-26 trajectory analysis confirmed `grep -rn "max_tokens"` returns 0 hits in source (D-06 honored) and max observed `completion_tokens` was 7019 — well under any cap. The truncation was DeepSeek-side stream cutoff, not a local budget.
 
@@ -35,7 +35,7 @@ Plan: gap-closure recovery
 | 5. Cleanup, Deletes, Tests, Regression | 4 | `05-SUMMARY.md` (plans 05-01..05-04) |
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
 | 7. Real-LLM Validation (REOPENED — blocked on phase 8) | 6 plans delivered + 11 fix-now commits (CR-01..05 + 7 WR/IN) | `07-WRIN-TRIAGE.md` now blocked again: 7 scheduled items cannot close until Phase 8 Stage 3 passes. |
-| 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening | G1 committed; G2-G4 local-done/uncommitted; G5 failed | `08-VERIFICATION.md` status `gaps_found`; batch `20260528T032645Z`; `08-G5-SUMMARY.md`. |
+| 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening | G1 committed; G2-G4 recovery committed; G5 rerun pending | `ca1ea21`, `c98989e`; prior `08-VERIFICATION.md` status `gaps_found`; batch `20260528T032645Z`; `08-G5-SUMMARY.md`. |
 
 ## Active Watchlist
 
@@ -46,10 +46,10 @@ Plan: gap-closure recovery
   cache-miss mean was 247.42, below signed [500,5000]; trials triggered 0
   times. See `08-VERIFICATION.md`.
 
-- **GSD recovery required.** G2-G4 code and SUMMARY files exist locally but are
-  not represented by a clean task/summary commit chain. New tests under
-  `tests/` are ignored by `.gitignore`; preserve them with explicit `git add -f`
-  only if they are intentionally part of recovery.
+- **GSD recovery completed (2026-05-28).** G2-G4 code, ignored tests, and
+  current production SKILL prose were committed in `ca1ea21`; `08-G2/G3/G4-
+  SUMMARY.md` were committed in `c98989e`. The remaining blocker is a fresh
+  real DeepSeek Stage 3 rerun.
 
 - **07-06 PARTIAL accepted (2026-05-27).** Stage 2 req2 fail-fasted on DeepSeek-side malformed `tool_call.arguments` JSON (truncation at char 3617 mid-string in a factor's `evidence_refs.path`). The runner's D-01/D-02/D-07/D-09/D-12/D-17/D-18/D-19/D-22 contracts held end-to-end. User explicitly accepted this outcome as a legitimate real-LLM behavioural finding (not a runner defect). The 2 successful captures plus 1 partial-on-fail-fast capture are the phase-7 evidence basis; `case_analysis.md` is the next user-driven step (outside execute-phase per D-13/D-14).
 
@@ -129,6 +129,12 @@ Plan: gap-closure recovery
 | Reference v2 emitter implementation | Phase 6 designs v2 only; emitter work is post-Phase 7. |
 | In-tree canonical run archival | Raw `.runs/` are local-only per Phase 7 D-09; revisit if case-reading needs it. |
 
+## Session Continuity
+
+Last session: 2026-05-28T05:26:54Z
+Stopped at: Session resumed; proceeding to Phase 8 G5 recovery.
+Resume file: `.planning/HANDOFF.json` plus `.planning/phases/08-evolution-wiring-and-runner-debt/.continue-here.md`
+
 ## Resume Instruction
 
 Phase 7 remains blocked on Phase 8. Phase 8 reached G5 but real DeepSeek Stage
@@ -143,9 +149,9 @@ $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-VERIFICATION.md
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-G5-SUMMARY.md
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/.run-logs/g5-verification-20260528T032645Z.txt
 
-# 2. Repair/supersede G2-G4 local-done/uncommitted commit-chain anomaly.
+# 2. G2-G4 commit-chain anomaly repaired in ca1ea21/c98989e.
 
-# 3. Fix Stage 3 gaps, rerun tests, then rerun real Stage 3:
+# 3. Stage 3 recovery fixes landed; rerun tests, then rerun real Stage 3:
 .venv/bin/python -m pytest -q
 .venv/bin/python -u -m seers_harness.validation.runner --env-file .env.local --stage 3
 
