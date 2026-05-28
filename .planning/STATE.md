@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-28T06:27:26.000Z"
+last_updated: "2026-05-28T07:40:44.000Z"
 progress:
   total_phases: 8
   completed_phases: 3
@@ -19,10 +19,11 @@ progress:
 Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING, G5 gaps_found
 Plan: gap-closure recovery
 
-- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batches `20260528T032645Z` and `20260528T055154Z` failed.
+- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batches `20260528T032645Z`, `20260528T055154Z`, and `20260528T070707Z` failed.
 - Verified baseline: G1 committed; G2-G4 recovery committed in `ca1ea21` with summaries closed in `c98989e`; full local suite now reports 381 tests passed.
 - Latest recovery: batch `20260528T055154Z` proved Stage3-only bootstrap now reaches distillation and produces 3 deltas, then Stage 3 failed fast on DeepSeek `402 Insufficient Balance`. Local TDD fixes now record visible runtime portfolios in request snapshots and classify 402 / insufficient balance as non-retryable `auth`.
 - 2026-05-28 audit follow-up: independent GSD verifier found trial patching was not actually wired into model prompts. Fixed with TDD: `WorkflowRuntime` now supports an isolated trial skill root, `run_request_trial` points patched trials at that root, baseline/control no longer writes trial snapshot events, trial snapshot rows include `delta_id`, uplift journal entries include artifact-derived behavioral metrics, and trial RNG can be seeded via `SEERS_TRIAL_RNG_SEED` for reproducibility.
+- Latest real Stage 3: batch `20260528T070707Z` reached c=20 after bootstrap produced 2 deltas, but failed fast on `malformed_tool_args` after 4 parse attempts for request `-6833932762567548368`. 19/20 rows were `ok`; snapshots now prove visible portfolio propagation, but `trials[]` and `portfolio_journal.jsonl` remain empty and copy cache-miss mean is 16328.11.
 - Code-review remediation: 4/4 Critical (CR-01..04) closed; CR-05 (parse-retry) closed `fc25187`; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
 - 2026-05-26 trajectory analysis confirmed `grep -rn "max_tokens"` returns 0 hits in source (D-06 honored) and max observed `completion_tokens` was 7019 — well under any cap. The truncation was DeepSeek-side stream cutoff, not a local budget.
 
@@ -64,6 +65,15 @@ Plan: gap-closure recovery
   now routes patched trials through an isolated temp skill root and keeps
   baseline/control on the current production prompt. Full local suite passed
   with 387 tests.
+
+- **Phase 8 real Stage 3 still failed after audit fix (2026-05-28).** Batch
+  `20260528T070707Z` reached Stage 3 c=20 and wrote 20 snapshot files. All
+  snapshots show visible bootstrap deltas (`d1_brand_register_awareness`,
+  `d2_sensory_anchor_requirement`), proving portfolio propagation is no longer
+  empty. The run still failed on `malformed_tool_args` after 4 parse attempts
+  at `factor_discovery` request `-6833932762567548368`; 19 rows were `ok`.
+  Trial selection remained zero and `portfolio_journal.jsonl` was absent, so
+  G4/M5 acceptance is still open.
 
 - **GSD recovery completed (2026-05-28).** G2-G4 code, ignored tests, and
   current production SKILL prose were committed in `ca1ea21`; `08-G2/G3/G4-
