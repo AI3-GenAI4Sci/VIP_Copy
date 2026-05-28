@@ -74,7 +74,15 @@ def infer_category(exc: Exception) -> str:
     text = repr(exc).lower()
     if "ratelimit" in name or "rate_limit" in name or "rate limit" in text or "429" in text:
         return "rate_limit"
-    if "authentication" in name or "permission" in name or "401" in text or "403" in text:
+    if (
+        "authentication" in name
+        or "permission" in name
+        or "401" in text
+        or "402" in text
+        or "403" in text
+        or "insufficient balance" in text
+        or "payment required" in text
+    ):
         return "auth"
     if any(term in name for term in ("timeout", "connection", "apierror")):
         return "transient_provider"

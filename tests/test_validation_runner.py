@@ -316,6 +316,38 @@ def test_run_one_request_fires_trial_when_portfolio_nonempty(monkeypatch, tmp_pa
     assert read_journal_entries(request_dir.parent / "portfolio_journal.jsonl")
 
 
+def test_run_one_request_snapshot_records_visible_portfolio(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    monkeypatch.setattr(runner._trial_rng, "random", lambda: 1.0)
+    live_skill_root, target, original = _write_live_skill_root(tmp_path)
+    portfolio = [
+        _valid_delta_row(
+            delta_id="D-visible",
+            target_skill=target,
+            proposed_change=original + "\nVisible portfolio refinement\n",
+        )
+    ]
+    request_dir = tmp_path / "req"
+
+    record = runner._run_one_request(
+        request_id="req-visible",
+        scenario={"request_id": "req-visible", "scenario_id": "scenario-1"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        request_dir=request_dir,
+        events=[],
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+    )
+
+    snapshot = _read_snapshot(request_dir)
+    assert record["exception"] is None
+    assert record["trial_selected_delta_id"] is None
+    assert snapshot["delta_portfolio_before"] == ["D-visible"]
+    assert snapshot["delta_portfolio_after"] == ["D-visible"]
+    assert snapshot["trials"] == []
+
+
 def test_run_one_request_skips_trial_when_portfolio_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
     live_skill_root, _target, _original = _write_live_skill_root(tmp_path)

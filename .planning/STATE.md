@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-28T04:05:00.000Z"
+last_updated: "2026-05-28T06:27:26.000Z"
 progress:
   total_phases: 8
   completed_phases: 3
@@ -19,8 +19,9 @@ progress:
 Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING, G5 gaps_found
 Plan: gap-closure recovery
 
-- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batch `20260528T032645Z` failed.
+- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batches `20260528T032645Z` and `20260528T055154Z` failed.
 - Verified baseline: G1 committed; G2-G4 recovery committed in `ca1ea21` with summaries closed in `c98989e`; full local suite now reports 381 tests passed.
+- Latest recovery: batch `20260528T055154Z` proved Stage3-only bootstrap now reaches distillation and produces 3 deltas, then Stage 3 failed fast on DeepSeek `402 Insufficient Balance`. Local TDD fixes now record visible runtime portfolios in request snapshots and classify 402 / insufficient balance as non-retryable `auth`.
 - Code-review remediation: 4/4 Critical (CR-01..04) closed; CR-05 (parse-retry) closed `fc25187`; 7 WR/IN closed-now; 7 WR/IN scheduled to phase 8.
 - 2026-05-26 trajectory analysis confirmed `grep -rn "max_tokens"` returns 0 hits in source (D-06 honored) and max observed `completion_tokens` was 7019 — well under any cap. The truncation was DeepSeek-side stream cutoff, not a local budget.
 
@@ -45,6 +46,16 @@ Plan: gap-closure recovery
   `batch_summary.json` exist; `portfolio_journal.jsonl` does not. Copy
   cache-miss mean was 247.42, below signed [500,5000]; trials triggered 0
   times. See `08-VERIFICATION.md`.
+
+- **Phase 8 recovery rerun blocked by DeepSeek balance (2026-05-28).** Batch
+  `20260528T055154Z` used `set -o pipefail` and reached real Stage 3 after
+  portfolio bootstrap produced 3 deltas. Stage 3 failed fast on DeepSeek
+  `402 Insufficient Balance`. New root-cause finding: per-request snapshots
+  did not record the visible bootstrap portfolio (`delta_portfolio_before: []`
+  across Stage 3), so trial evidence remained unobservable. Local TDD fixes now
+  emit the visible portfolio at request start and classify 402 / insufficient
+  balance as `auth`; next acceptance action requires account balance/quota
+  restoration and a fresh real Stage 3 rerun.
 
 - **GSD recovery completed (2026-05-28).** G2-G4 code, ignored tests, and
   current production SKILL prose were committed in `ca1ea21`; `08-G2/G3/G4-

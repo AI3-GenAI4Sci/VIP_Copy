@@ -8,6 +8,7 @@ from seers_harness.core.errors import (
     ProviderRateLimitError,
     ProviderResponseError,
     ProviderTransientError,
+    classify_exception,
 )
 from seers_harness.validation.exception_classifier import (
     TrialFailure,
@@ -50,6 +51,18 @@ def test_failure_class_walks_cause_chain_for_provider_auth():
     wrapped.__cause__ = provider_exc
 
     assert failure_class(wrapped) == "auth"
+
+
+def test_provider_402_insufficient_balance_classifies_as_auth():
+    exc = RuntimeError(
+        "APIStatusError: Error code: 402 - "
+        "{'error': {'message': 'Insufficient Balance'}}"
+    )
+
+    result = classify_exception(exc)
+
+    assert result["category"] == "auth"
+    assert result["retryable"] is False
 
 
 def test_classify_three_label_contract_is_unchanged():

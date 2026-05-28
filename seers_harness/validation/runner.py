@@ -670,6 +670,15 @@ def _run_one_request(
     with _inflight_lock:
         _inflight_count += 1
     try:
+        portfolio_ids = [row.delta_id for row in delta_portfolio]
+        events.append(
+            {
+                "type": "portfolio_assembled",
+                "delta_portfolio_before": portfolio_ids,
+                "delta_portfolio_after": portfolio_ids,
+                "counts": {"before": len(portfolio_ids), "after": len(portfolio_ids)},
+            }
+        )
         # Drive the canonical 3-node DAG. ``run_request`` raises on any
         # node failure; we let that propagate so the caller can run the
         # D-19 routing.
