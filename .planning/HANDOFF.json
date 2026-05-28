@@ -1,0 +1,107 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-28T16:07:42Z",
+  "phase": "08",
+  "phase_name": "evolution-wiring-and-runner-debt",
+  "phase_dir": ".planning/phases/08-evolution-wiring-and-runner-debt",
+  "plan": "08-G5-recovery",
+  "task": "fresh-real-stage3-rerun",
+  "total_tasks": 5,
+  "status": "paused_gaps_found",
+  "completed_tasks": [
+    {
+      "id": "G1",
+      "name": "restore SKILL loading and Stage 3 bootstrap path",
+      "status": "done",
+      "commit": "ca1ea21"
+    },
+    {
+      "id": "G2-G4",
+      "name": "surface portfolio evidence, wire trial skill roots, classify auth failures, add trial gate evidence",
+      "status": "done",
+      "commit": "8b0749e"
+    },
+    {
+      "id": "G5",
+      "name": "real DeepSeek Stage 3 acceptance",
+      "status": "gaps_found",
+      "progress": "latest batch 20260528T070707Z reached n=20 c=20 but failed with 1 malformed_tool_args, 19 ok, zero selected trials, no journal"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": "R1",
+      "name": "rerun real DeepSeek Stage 3 after balance replenishment and trial_gate observability",
+      "status": "next"
+    },
+    {
+      "id": "R2",
+      "name": "inspect batch_summary, index, evolution snapshots, trial_gate, portfolio journal, copy usage evidence",
+      "status": "not_started"
+    },
+    {
+      "id": "R3",
+      "name": "fix any remaining malformed tool JSON, trial selection, journal/status, or cache-miss failures",
+      "status": "not_started"
+    },
+    {
+      "id": "R4",
+      "name": "perform G5 manual spot-check only after automated gates pass",
+      "status": "not_started"
+    },
+    {
+      "id": "R5",
+      "name": "close Phase 7 WR/IN items to real Phase 8 commit refs only after Phase 8 passes",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Real Stage 3 has not passed; latest batch failed on malformed_tool_args after 4 parse attempts",
+      "type": "technical",
+      "workaround": "none; rerun after latest observability, then fix root cause if failure persists"
+    },
+    {
+      "description": "Trial selection not proven in real artifacts; trials[] total was zero and portfolio_journal.jsonl absent",
+      "type": "technical",
+      "workaround": "inspect trial_gate fields in next run to identify pressure/eligibility cause"
+    },
+    {
+      "description": "Copy prompt_cache_miss mean outside signed [500, 5000] band in latest aggregate evidence",
+      "type": "technical",
+      "workaround": "analyze real usage after next complete run; do not silently revise target"
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "Maintain DeepSeek quota/balance for the next real Stage 3 run",
+      "context": "Previous run 20260528T055154Z failed on 402 Insufficient Balance; user has now replenished quota",
+      "blocking": false
+    },
+    {
+      "action": "Manual copy-quality spot-check of 5 sampled outputs",
+      "context": "G5 is autonomous=false, but this only happens after automated Stage 3 gates pass",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Keep recovery in Phase 8",
+      "rationale": "The remaining work is acceptance recovery for existing Phase 8 gates, not a new phase",
+      "phase": "08"
+    },
+    {
+      "decision": "Use real Stage 3 artifacts as acceptance gate",
+      "rationale": "Local tests can verify code paths but cannot prove real DeepSeek behavior, trial selection, or journal/status transitions",
+      "phase": "08"
+    },
+    {
+      "decision": "Do not treat portfolio visibility as trial success",
+      "rationale": "Batch 20260528T070707Z had visible deltas in snapshots but zero selected trials and no journal",
+      "phase": "08"
+    }
+  ],
+  "uncommitted_files_note": "Working tree contains many dirty/untracked files unrelated to this handoff. Do not revert or mix them into recovery commits without inspection.",
+  "next_action": "Run a fresh real DeepSeek Stage 3 using the command in .planning/phases/08-evolution-wiring-and-runner-debt/.continue-here.md, then inspect trial_gate, trials, journal, failure_class, and copy usage evidence.",
+  "context_notes": "Strict GSD recovery state. User wants Chinese responses and GSD framework. Do not mark Phase 8 passed unless real Stage 3 artifacts satisfy gates and manual G5 spot-check passes."
+}
