@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from seers_harness.evolution.delta_portfolio import DeltaPortfolioRow
 from seers_harness.core.errors import ProviderAuthError
+from seers_harness.evolution.portfolio_journal import read_journal_entries
 from seers_harness.validation import runner
 
 
@@ -307,9 +308,12 @@ def test_run_one_request_fires_trial_when_portfolio_nonempty(monkeypatch, tmp_pa
 
     snapshot = _read_snapshot(request_dir)
     assert record["exception"] is None
-    assert snapshot["trials"] == [{"trial_id": "req-trial", "status": "succeeded"}]
-    assert portfolio[0].sample_count == 1
-    assert portfolio[0].success_count == 1
+    assert snapshot["trials"] == [
+        {"trial_id": "req-trial", "status": "succeeded"},
+        {"trial_id": "req-trial", "status": "succeeded"},
+    ]
+    assert record["trial_selected_delta_id"] == "D-live"
+    assert read_journal_entries(request_dir.parent / "portfolio_journal.jsonl")
 
 
 def test_run_one_request_skips_trial_when_portfolio_empty(monkeypatch, tmp_path):
@@ -358,8 +362,10 @@ def test_run_one_request_trial_failure_does_not_abort_host(monkeypatch, tmp_path
     assert record["exception"] is None
     assert snapshot["trials"][0]["status"] == "failed"
     assert snapshot["trials"][0]["exception_class"] == "AssertionError"
-    assert portfolio[0].sample_count == 1
-    assert portfolio[0].failure_count == 1
+    assert portfolio[0].sample_count == 0
+    entries = read_journal_entries(request_dir.parent / "portfolio_journal.jsonl")
+    assert len(entries) == 1
+    assert entries[0].success is False
 
 
 def test_run_one_request_skips_non_modify_skill_delta(monkeypatch, tmp_path):
@@ -384,6 +390,19 @@ def test_run_one_request_skips_non_modify_skill_delta(monkeypatch, tmp_path):
     assert portfolio[0].sample_count == 0
 
 
+def test_patch_from_portfolio_row_warns_on_non_modify_skill(tmp_path, capsys):
+    live_skill_root, target, _original = _write_live_skill_root(tmp_path)
+    row = _valid_delta_row(target_skill=target, change_type="add_skill")
+
+    patch = runner._patch_from_portfolio_row(row, live_skill_root)
+    captured = capsys.readouterr()
+
+    assert patch is None
+    assert "trial_skipped" in captured.err
+    assert "non_modify_skill" in captured.err
+    assert "D-test" in captured.err
+
+
 def test_run_one_request_skips_drifted_target_path(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
     live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
@@ -406,6 +425,31 @@ def test_run_one_request_skips_drifted_target_path(monkeypatch, tmp_path):
     assert portfolio[0].sample_count == 0
 
 
+def test_patch_from_portfolio_row_warns_on_unresolvable_target(tmp_path, capsys):
+    live_skill_root, _target, _original = _write_live_skill_root(tmp_path)
+    row = _valid_delta_row(target_skill="current/missing/SKILL.md")
+
+    patch = runner._patch_from_portfolio_row(row, live_skill_root)
+    captured = capsys.readouterr()
+
+    assert patch is None
+    assert "trial_skipped" in captured.err
+    assert "target_unresolvable" in captured.err
+    assert "current/missing/SKILL.md" in captured.err
+
+
+def test_patch_from_portfolio_row_resolves_canonical_path(tmp_path, capsys):
+    live_skill_root, target, _original = _write_live_skill_root(tmp_path)
+    row = _valid_delta_row(target_skill=target)
+
+    patch = runner._patch_from_portfolio_row(row, live_skill_root)
+    captured = capsys.readouterr()
+
+    assert patch is not None
+    assert patch.target_path == target
+    assert "trial_skipped" not in captured.err
+
+
 def test_distill_after_stage1_with_recording_provider(tmp_path):
     stage_dir = tmp_path / "stage1"
     _write_stage1_evidence(stage_dir)
@@ -425,6 +469,62 @@ def test_distill_after_stage1_with_recording_provider(tmp_path):
     )
 
     assert [row.delta_id for row in portfolio] == ["D-1", "D-2"]
+
+
+def test_distill_persists_evidence_to_disk(tmp_path):
+    stage_dir = tmp_path / "stage1"
+    request_dir = _write_stage1_evidence(stage_dir)
+    result = runner.StageResult(
+        stage=1,
+        passed=True,
+        records=[{"request_id": "req-1"}],
+        stage_dir=stage_dir,
+    )
+
+    runner._distill_after_stage1(
+        stage1_result=result,
+        provider_factory=lambda: _DistillProvider(
+            _distill_artifact(deltas=[_distill_delta("D-1")])
+        ),
+        current_portfolio=[],
+    )
+
+    evidence_dir = request_dir / "distill_evidence" / "distill_after_stage1"
+    assert (evidence_dir / "messages.jsonl").read_text(encoding="utf-8").strip()
+    assert (evidence_dir / "tool_calls.jsonl").read_text(encoding="utf-8").strip()
+    assert (evidence_dir / "artifact.json").exists()
+    assert (evidence_dir / "usage.json").exists()
+
+
+def test_distill_evidence_flush_failure_does_not_mask_artifact(
+    monkeypatch, tmp_path, capsys
+):
+    stage_dir = tmp_path / "stage1"
+    _write_stage1_evidence(stage_dir)
+    result = runner.StageResult(
+        stage=1,
+        passed=True,
+        records=[{"request_id": "req-1"}],
+        stage_dir=stage_dir,
+    )
+
+    def raise_flush(*_args, **_kwargs):
+        raise PermissionError("distill evidence denied")
+
+    monkeypatch.setattr(runner, "flush_evidence", raise_flush)
+
+    portfolio = runner._distill_after_stage1(
+        stage1_result=result,
+        provider_factory=lambda: _DistillProvider(
+            _distill_artifact(deltas=[_distill_delta("D-1")])
+        ),
+        current_portfolio=[],
+    )
+    captured = capsys.readouterr()
+
+    assert [row.delta_id for row in portfolio] == ["D-1"]
+    assert "distill_evidence flush failed" in captured.err
+    assert "PermissionError" in captured.err
 
 
 def test_distill_after_stage1_empty_proposals_yields_empty_portfolio(tmp_path):
@@ -475,6 +575,111 @@ def test_distill_after_stage1_invalid_artifact_raises(monkeypatch, tmp_path):
         )
 
 
+class _AlwaysTrialSignalWindow:
+    def failure_rate(self):
+        return 0.0
+
+    def token_pressure(self, *, budget_per_request):
+        return 0.0
+
+    def record_baseline_outcome(self, *, success, total_tokens):
+        self.last = {"success": success, "total_tokens": total_tokens}
+
+
+class _SuppressTrialSignalWindow(_AlwaysTrialSignalWindow):
+    def failure_rate(self):
+        return 1.0
+
+
+def test_select_trial_delta_gate_skips_when_signals_high(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    monkeypatch.setattr(runner, "_signal_window", _SuppressTrialSignalWindow())
+    live_skill_root, target, _original = _write_live_skill_root(tmp_path)
+    portfolio = [_valid_delta_row(delta_id="D-skip", target_skill=target)]
+
+    record = runner._run_one_request(
+        request_id="req-skip",
+        scenario={"request_id": "req-skip"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        request_dir=tmp_path / "req-skip",
+        events=[],
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+        journal_path=tmp_path / "portfolio_journal.jsonl",
+        max_concurrent=20,
+    )
+
+    assert record["exception"] is None
+    assert record["trial_selected_delta_id"] is None
+    assert not (tmp_path / "portfolio_journal.jsonl").exists()
+    assert "trial_skipped" not in capsys.readouterr().err
+
+
+def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    monkeypatch.setattr(runner, "_signal_window", _AlwaysTrialSignalWindow())
+    live_skill_root, target, original = _write_live_skill_root(tmp_path)
+    portfolio = [
+        _valid_delta_row(
+            delta_id="D-live",
+            target_skill=target,
+            proposed_change=original + "\nTrial refinement\n",
+        )
+    ]
+    journal_path = tmp_path / "portfolio_journal.jsonl"
+
+    record = runner._run_one_request(
+        request_id="req-trial",
+        scenario={"request_id": "req-trial", "scenario_id": "scenario-1"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        request_dir=tmp_path / "req-trial",
+        events=[],
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+        journal_path=journal_path,
+        max_concurrent=20,
+    )
+
+    assert record["exception"] is None
+    assert record["trial_selected_delta_id"] == "D-live"
+    assert (tmp_path / "req-trial/trial_workspace/_baseline").exists()
+    assert (tmp_path / "req-trial/trial_workspace/D-live").exists()
+    entries = read_journal_entries(journal_path)
+    assert len(entries) == 1
+    assert entries[0].delta_id == "D-live"
+
+
+def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    monkeypatch.setattr(runner, "_signal_window", _AlwaysTrialSignalWindow())
+    monkeypatch.setitem(runner._STAGE_CONFIG, 2, (1, 1))
+    live_skill_root, target, original = _write_live_skill_root(tmp_path)
+    portfolio = [
+        _valid_delta_row(
+            delta_id="D-stage",
+            target_skill=target,
+            proposed_change=original + "\nTrial refinement\n",
+        )
+    ]
+
+    result = runner._run_stage(
+        stage=2,
+        request_ids=["req-stage"],
+        scenario_loader=lambda rid: {"request_id": rid, "scenario_id": "scenario-1"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+    )
+
+    assert result.passed is True
+    assert portfolio[0].sample_count == 1
+
+
 def test_run_drives_distill_only_after_stage1_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "_STAGE_CONFIG", {1: (1, 1)})
     distill_calls = []
@@ -522,6 +727,49 @@ def test_run_drives_distill_only_after_stage1_passes(monkeypatch, tmp_path):
         provider_factory=lambda: object(),
     ) == 0
     assert distill_calls == [1]
+
+
+def test_stage3_only_bootstraps_distilled_portfolio_from_current_trace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    live_skill_root, target, original = _write_live_skill_root(tmp_path)
+    monkeypatch.setattr(runner, "LIVE_SKILL_ROOT", live_skill_root)
+    distilled_row = _valid_delta_row(
+        delta_id="D-bootstrap",
+        target_skill=target,
+        proposed_change=original + "\nBootstrap trial refinement\n",
+    )
+    distill_calls = []
+    stage_portfolios = []
+
+    def fake_distill(**kwargs):
+        distill_calls.append(kwargs["stage1_result"].stage)
+        return [distilled_row]
+
+    def fake_run_stage(**kwargs):
+        stage_portfolios.append(list(kwargs["delta_portfolio"]))
+        return runner.StageResult(
+            stage=kwargs["stage"],
+            passed=True,
+            records=[{"request_id": "req-stage3"}],
+            stage_dir=tmp_path / "stage3",
+        )
+
+    monkeypatch.setattr(runner, "_distill_after_stage1", fake_distill, raising=False)
+    monkeypatch.setattr(runner, "_run_stage", fake_run_stage)
+
+    assert runner.run(
+        stages=(3,),
+        out_dir=tmp_path / "stage3-only",
+        request_ids=["req-stage3"],
+        scenario_loader=lambda rid: {"request_id": rid, "scenario_id": rid},
+        nodes_factory=lambda: [],
+        provider_factory=lambda: object(),
+    ) == 0
+
+    assert distill_calls == [1]
+    assert [row.delta_id for row in stage_portfolios[0]] == ["D-bootstrap"]
 
 
 def test_stage3_fail_fast_drains_inflight(monkeypatch, tmp_path):
@@ -847,4 +1095,3 @@ def test_build_scratch_csv_resolves_detect_delimiter(tmp_path):
 
     assert chosen == ["r1", "r2"]
     assert scratch_path.exists()
-

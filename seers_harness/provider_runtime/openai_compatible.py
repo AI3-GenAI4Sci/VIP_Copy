@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any
 
 from openai import OpenAI
@@ -90,6 +91,11 @@ class OpenAICompatibleProvider:
                 ]
             except ProviderResponseError as exc:
                 last_parse = exc
+                print(
+                    f"[provider] parse_retry node={node_id} "
+                    f"attempt={_attempt + 1}/{_parse_max_retries() + 1}",
+                    file=sys.stderr,
+                )
                 continue
             return ProviderResult(
                 payload={}, usage=dict(self.last_usage), tool_calls=tool_calls_out,

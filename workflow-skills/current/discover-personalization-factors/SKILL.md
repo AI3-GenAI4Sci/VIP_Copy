@@ -1,59 +1,71 @@
 ---
 name: discover-personalization-factors
-description: Discover transferable user-product factors a downstream copy node can speak from without reopening raw user state.
+description: Build deep, scene-grounded user-product reasoning so the downstream copy node has a distinct persuasion angle per factor. A factor here is a paragraph of reasoning, not a label.
 ---
 
 # Discover Personalization Factors
 
-## What this skill does
+## Purpose
 
-Mine sparse user-product relations for one request and one list group, and
-record each as a transferable disposition that survives U2U/U2I retrieval.
-A factor names a relation and surfaces a public hook for the copy node; it
-never narrates the user and never pre-writes the card line.
+A user shown a recommended product is, by default, not yet interested. The copy node's job is to move them toward interest. This skill builds the upstream reasoning that gives the copy node something to push off from — one *psychological door* per factor, named through a transferable disposition and a concrete public hook the next node can quote.
 
-## Glossary
+## Inputs
 
-- transferable disposition: the latent reason a *type* of user could care
-  about this product, distilled so a retrieved user with the same disposition
-  but different history tokens still fits the factor.
-- public hook: a concrete fragment from `derived_features_by_product` or
-  product attributes the copy node can quote without seeing raw user state.
-- references advisory: catalog labels are evidence for relation hypothesis,
-  not verdicts; treat them as inputs, not as the factor.
+- `scenario.user_state` — profile, behavior, context.
+- `scenario.target_products[*]` — attributes, observed labels.
+- `scenario.derived_features_by_product` — precomputed user-product relations (price gap, brand-level fit, cold-start combo, recent-search distance, activity tier).
+- Standards reference: `workspace/docs/rubrics.md` (Factor Rubric) and `workspace/docs/methodology.md` (Candidate-Derived Method Rules).
 
-## How to think
+## Workflow
 
-Read user, product, and derived signals together. Behavior is usually closer
-to shopping intent than declared profile fields. A derived bucket is a seed,
-not the factor itself; the factor is the relation behind the bucket.
+1. **Build the scene picture.** Read profile + behavior + context + derived features as one short narrative — who this user is right now, what life-stage and shopping mood the signals imply. Stop at "buyer of category X" and every subsequent step degrades.
 
-Apply the junior-analyst test before recording. If a beginner could produce
-the line by reading one field and renaming the column, it is a column
-rename, not a factor. Re-record it as the disposition the column reveals.
+2. **Enumerate psychological doors.** For this user × this product, list silently the plausible routes by which they could become interested: self-reward in a private moment, peer validation against purchase uncertainty, time-tested re-recognition, anxiety-resolution, identity-shift, category-extension, exploration-of-new-affordance, and so on. Doors arise from the scene; never from a fixed taxonomy. If only one door surfaces, the scene picture is too thin — revisit step 1.
 
-Pick one direction per factor — `user_to_need`, `item_to_need`, or `cross`
-— as a hook-origin label, not a quota. Prefer fewer strong factors over
-many thin paraphrases; record only relations distinct in evidence.
+3. **Select doors for this request.** Choose distinct doors — one per factor — so the candidate set downstream is structurally diverse. Crowding multiple factors through the same door produces same-angle copy.
+
+4. **For each chosen door, write the factor through five silent layers.**
+   - Raw evidence — the literal user-side, product-side, or derived fragment.
+   - Scene inference — what state of life or mood the evidence reveals.
+   - Door selection — which door this factor is approached through.
+   - Product entry point — the concrete affordance behind that door (attribute, derived bucket, observed label).
+   - Persuasion angle — one sentence on why a user in this scene, approached through this door with this entry point, could move from indifference to interest.
+
+5. **Compose the factor record.** Carry the reasoning compactly into `transferable_disposition`, name the door's logic in `bridge`, and put a quotable concrete fragment into every `evidence_refs[].value`. Do not write the card line; leave room for the copy node.
+
+6. **Reach for the non-obvious angle.** Before recording, ask whether the chosen angle is the surface one any other recommendation today would pick. If yes, search for the angle a thoughtful product manager would notice — a tension the data implies but does not state.
+
+7. **Verify transferability.** Another user with the same scene and door, but different exact history tokens, must still fit the factor. If the factor depends on one private trace, lift it to the disposition behind the trace.
+
+8. **Call `reflect_on_coverage`** when uncertainty remains about door diversity. Its question is whether the recorded factors enter through different doors, not whether more factors could be invented. Answer in writing the next turn, then submit.
+
+9. **Submit through `submit_factors_final`.**
+
+## Key rules
+
+- A factor is the relation behind a signal, not the signal renamed.
+- A role, identity, life stage, tier, or family relation is a *scene input*, not a factor conclusion.
+- One door per factor; distinct doors across the request.
+- `evidence_refs[].value` is a literal data fragment; paraphrase belongs in `transferable_disposition` and `bridge`.
+- The factor body does not pre-write the card angle.
 
 ## Anti-patterns
 
-Do not transcribe a single user-side field and call it a factor. Do not
-hard-stitch a literal token from this user's behavior when a retrieved user
-without that token cannot carry the relation. Do not pre-pick the card
-angle, name a demographic or family role as a conclusion, or invent product
-facts the schema does not show.
+- **Single-field translation as factor** (workflow step 4 fails) → re-enter step 1 and lift the underlying disposition.
+- **Role-as-conclusion** (workflow step 4 fails) → ask what *being in that role right now* changes about how this product is heard; that change is the factor.
+- **Doors crowded onto one route** (workflow step 3 fails) → re-read the scene; a real user has more than one way of being persuaded by a real product.
+- **Surface-angle settling** (workflow step 6 fails) → demand the second-look angle.
+- **Paraphrase in evidence value** (workflow step 5 fails) → replace with the literal fragment.
+- **Card line inside the factor** (workflow step 5 fails) → leave the writing to the copy node.
 
-## Reflection
+## Language
 
-Use `record_factor` once per relation; call `reflect_on_coverage` whenever
-you are uncertain whether transferable angles are exhausted, before
-`submit_factors_final`. The tool returns its own questions; answer each in
-writing in the next turn, then submit. Reflection is a mirror, not a
-verdict — it surfaces blind spots, it does not approve the list.
+Chinese inputs → Chinese in `transferable_disposition`, `bridge`, `user_side_signal`. `evidence_refs[].value` is the literal data fragment in its original form. `direction` is the schema enum.
 
-## Finishing
+## Outputs
 
-Submit through `submit_factors_final` once every recorded factor passes the
-relation-not-translation, public-hook, and disposition-portability checks;
-the artifact is the only handoff to the copy node.
+`FactorDiscoveryArtifact` per the domain model. The artifact is the only handoff downstream; what the factor does not carry, the copy node cannot recover.
+
+## Composition
+
+`discover-personalization-factors` → `generate-copy-candidates` → `personalized-copy-rubric-judge`. The factor's psychological door is read by the copy node as its persuasion angle; the rubric judge reads the factor only via the candidate's `source_factor_id` linkage.

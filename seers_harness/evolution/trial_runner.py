@@ -273,6 +273,31 @@ def run_request_trial(
     return outcome
 
 
+def run_request_baseline(
+    *,
+    runtime: WorkflowRuntime,
+    scenario: Any,
+    nodes: list[NodeSpec],
+    live_skill_root: Path,
+    workspace_dir: Path,
+    request_id: str = "",
+    scenario_id: str = "",
+    events: list[dict] | None = None,
+) -> TrialOutcome:
+    """Run the paired-control baseline path without applying a patch."""
+    return run_request_trial(
+        runtime=runtime,
+        scenario=scenario,
+        nodes=nodes,
+        live_skill_root=live_skill_root,
+        workspace_dir=workspace_dir,
+        patch=None,
+        request_id=request_id,
+        scenario_id=scenario_id,
+        events=events,
+    )
+
+
 def _delta_id_from_patch_or_none(patch: SkillDeltaPatch) -> str | None:
     """Best-effort delta id derived from the patch target.
 

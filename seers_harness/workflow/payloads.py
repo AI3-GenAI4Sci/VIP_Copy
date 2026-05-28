@@ -3,11 +3,12 @@
 Each node sees a strictly bounded view of the Scenario:
   - factor_discovery sees user_state.behavior + products + derived features.
   - copy_generation sees factors + product facts + derived features +
-    candidate_generation_policy. NO raw user_state — copy lines are derived
-    from the public factor signals (one factor surfaces zero, one, or many
-    candidates depending on signal richness; the harness sends no fan-out
-    quota to the model — see master_plan §4.5).
-  - personalized_copy_rubric sees rubric-shaped candidates + product facts.
+    candidate_generation_policy + the signed-off user_state disclosure
+    boundary. It never receives raw user_state wholesale (one factor surfaces
+    zero, one, or many candidates depending on signal richness; the harness
+    sends no fan-out quota to the model — see master_plan §4.5).
+  - personalized_copy_rubric sees rubric-shaped candidates + product facts +
+    the same bounded user_state disclosure and candidate bridge logic.
 
 Per master_plan §4.5, ``candidate_generation_policy`` is locked to exactly
 two keys (``unit`` and ``score_all_candidates_together_after_hard_rules``);
@@ -29,6 +30,52 @@ candidate_generation_policy: dict[str, Any] = {
     "unit": "request/list_group",
     "score_all_candidates_together_after_hard_rules": True,
 }
+
+_SUMMARY_PROFILE_KEYS = ("gender", "age", "city_level", "vip_level", "is_svip")
+_SUMMARY_CONTEXT_KEYS = ("device_type", "hour")
+_PROFILE_COUNT_KEYS = (
+    "register_days",
+    "click_cnt_30d",
+    "order_cnt_30d",
+    "order_cnt_90d",
+    "purchase_price_avg_30d",
+    "fav_price_avg_30d",
+    "coupon_use_cnt_30d",
+    "cart_cnt_30d",
+    "fav_brand_cnt_30d",
+)
+_BEHAVIOR_TOP_LIST_KEYS = (
+    "prefer_cat3_topK",
+    "prefer_brand_topK",
+    "seq_click_cat3_48h",
+    "seq_click_brand_48h",
+    "order_goods_id_list_topN",
+    "order_brand_id_list_topN",
+    "order_cat3_id_list_topN",
+    "addcart_goods_id_list_topN",
+    "addcart_brand_id_list_topN",
+    "addcart_cat3_id_list_topN",
+    "collect_goods_id_list_topN",
+    "collect_brand_id_list_topN",
+    "click_brand_id_list_topN",
+)
+_TARGET_PRODUCT_DERIVED_KEYS = (
+    "price_vs_user_baseline_ratio",
+    "brand_recent_touched",
+    "ctr_band",
+    "is_new",
+)
+
+
+def _normalize_payload_value(value: Any) -> Any:
+    if isinstance(value, float):
+        return round(value, 2)
+    return value
+
+
+def _pick_ordered(source: Any, keys: tuple[str, ...]) -> dict[str, Any]:
+    source_dict = source if isinstance(source, dict) else {}
+    return {key: _normalize_payload_value(source_dict.get(key)) for key in keys}
 
 
 def _scenario_dict(scenario: Any) -> dict[str, Any]:
@@ -62,6 +109,40 @@ def _derived_for_products(scenario: dict[str, Any], products: list[dict[str, Any
     }
 
 
+def _target_product_derived_signals(
+    scenario: dict[str, Any],
+    products: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        product_id: _pick_ordered(features, _TARGET_PRODUCT_DERIVED_KEYS)
+        for product_id, features in _derived_for_products(scenario, products).items()
+    }
+
+
+def _user_state_summary(scenario: dict[str, Any]) -> dict[str, Any]:
+    user_state = scenario.get("user_state") if isinstance(scenario.get("user_state"), dict) else {}
+    profile = user_state.get("profile") if isinstance(user_state.get("profile"), dict) else {}
+    context = user_state.get("context") if isinstance(user_state.get("context"), dict) else {}
+    return {
+        "profile": _pick_ordered(profile, _SUMMARY_PROFILE_KEYS),
+        "context": _pick_ordered(context, _SUMMARY_CONTEXT_KEYS),
+    }
+
+
+def _user_state_signals(
+    scenario: dict[str, Any],
+    products: list[dict[str, Any]],
+) -> dict[str, Any]:
+    user_state = scenario.get("user_state") if isinstance(scenario.get("user_state"), dict) else {}
+    profile = user_state.get("profile") if isinstance(user_state.get("profile"), dict) else {}
+    behavior = user_state.get("behavior") if isinstance(user_state.get("behavior"), dict) else {}
+    return {
+        "profile_counts": _pick_ordered(profile, _PROFILE_COUNT_KEYS),
+        "behavior_top_lists": _pick_ordered(behavior, _BEHAVIOR_TOP_LIST_KEYS),
+        "target_product_derived": _target_product_derived_signals(scenario, products),
+    }
+
+
 def factor_payload_for(scenario: Any) -> dict[str, Any]:
     """Request-level factor-discovery input.
 
@@ -90,10 +171,10 @@ def copy_payload_for(
 ) -> dict[str, Any]:
     """Request-level copy-generation input.
 
-    NO raw user_state — copy lines are derived from the public factor signals
-    in factors_artifact. Quantity is the SKILL's judgment, not the harness's:
-    the policy dict tells the model the unit is request/list_group and that
-    all candidates are scored together after hard rules. No fan-out quota.
+    No raw user_state wholesale: only the signed G2 disclosure boundary is
+    included. Quantity is the SKILL's judgment, not the harness's: the policy
+    dict tells the model the unit is request/list_group and that all candidates
+    are scored together after hard rules. No fan-out quota.
     """
     s = _scenario_dict(scenario)
     artifact = factors_artifact or {}
@@ -102,6 +183,7 @@ def copy_payload_for(
         "scenario_id": s.get("scenario_id"),
         "request_id": s.get("request_id"),
         "minimum_semantic_unit": "request/list_group",
+        "user_state_summary": _user_state_summary(s),
         "factors": list(artifact.get("factors") or artifact.get("personalization_factors") or []),
         "products": products,
         "target_products": products,
@@ -109,6 +191,7 @@ def copy_payload_for(
         "candidate_generation_policy": candidate_generation_policy,
         "derived_features_by_product": _derived_for_products(s, products),
         "list_context": s.get("list_context") or {},
+        "user_state_signals": _user_state_signals(s, products),
     }
 
 
@@ -116,6 +199,7 @@ def rubric_payload_for(
     *,
     scenario: Any,
     copy_artifact: dict[str, Any] | None = None,
+    factors_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Request-level rubric input — candidates + product facts.
 
@@ -124,6 +208,8 @@ def rubric_payload_for(
     """
     s = _scenario_dict(scenario)
     copy = copy_artifact or {}
+    factors = factors_artifact or {}
+    products = list(s.get("products") or [])
     candidates: list[dict[str, Any]] = []
     for idx, candidate in enumerate(copy.get("candidates") or []):
         candidates.append(
@@ -134,6 +220,9 @@ def rubric_payload_for(
                 "factor_id": str(candidate.get("source_factor_id") or ""),
                 "copy_text": str(candidate.get("text") or ""),
                 "group_key": str(candidate.get("group_key") or ""),
+                "bridge_logic": dict(candidate.get("bridge_logic") or {}),
+                "used_copyable_hooks": list(candidate.get("used_copyable_hooks") or []),
+                "intended_effect": str(candidate.get("intended_effect") or ""),
             }
         )
     return {
@@ -141,7 +230,10 @@ def rubric_payload_for(
         "scenario_id": s.get("scenario_id"),
         "request_id": s.get("request_id"),
         "minimum_semantic_unit": "request/list_group",
-        "products": list(s.get("products") or []),
+        "user_state_summary": _user_state_summary(s),
+        "user_state_signals": _user_state_signals(s, products),
+        "factors": list(factors.get("factors") or factors.get("personalization_factors") or []),
+        "products": products,
         "candidates": candidates,
         "candidate_count": len(candidates),
     }
@@ -172,6 +264,7 @@ def provider_payload_for_node(
         view = rubric_payload_for(
             scenario=scenario,
             copy_artifact=deps.get("copy_generation") or {},
+            factors_artifact=deps.get("factor_discovery") or {},
         )
     else:
         view = _scenario_dict(scenario)

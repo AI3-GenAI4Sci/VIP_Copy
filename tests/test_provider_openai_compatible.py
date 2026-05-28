@@ -187,6 +187,36 @@ def test_arguments_parse_failure_raises_provider_response_error(
     assert len(fake_openai_client.calls) == 2
 
 
+def test_parse_retry_logs_attempt_without_raw_arguments(
+    monkeypatch, fake_openai_client, fake_openai_response, capsys
+):
+    """Audit log must expose retry attempts without leaking raw model text."""
+    monkeypatch.setenv("DEEPSEEK_PARSE_MAX_RETRIES", "1")
+    provider = _make_provider(monkeypatch, fake_openai_client)
+    bad = fake_openai_response(
+        tool_calls=[{"id": "call_x", "name": "f", "arguments": '{"factor_id"'}],
+        finish_reason="tool_calls",
+    )
+    seq = iter([bad, bad])
+
+    def _create(**kwargs):
+        fake_openai_client.calls.append(kwargs)
+        return next(seq)
+
+    fake_openai_client.chat.completions.create = _create
+    with pytest.raises(ProviderResponseError):
+        provider.generate_with_tools(
+            node_id="factor_discovery",
+            skill_bundle="sb",
+            messages=[{"role": "user", "content": "go"}],
+            tools=[],
+        )
+
+    captured = capsys.readouterr()
+    assert "[provider] parse_retry node=factor_discovery attempt=1/2" in captured.err
+    assert '{"factor_id"' not in captured.err
+
+
 def test_parse_retry_recovers_when_second_attempt_returns_valid_json(
     monkeypatch, fake_openai_client, fake_openai_response
 ):

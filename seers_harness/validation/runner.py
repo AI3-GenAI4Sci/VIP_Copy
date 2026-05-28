@@ -120,7 +120,9 @@ import argparse
 import datetime as _dt
 import json
 import os
+import random
 import sys
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -136,13 +138,26 @@ from seers_harness.evolution.delta_portfolio import (
     DeltaDistillationArtifact,
     DeltaPortfolioRow,
     assemble_portfolio,
-    update_after_trial,
+    select_trial_delta,
+)
+from seers_harness.evolution.portfolio_journal import (
+    PortfolioJournalEntry,
+    append_journal_entry,
+    fold_portfolio_journal,
+    read_journal_entries,
+)
+from seers_harness.evolution.status_machine import apply_status_transitions
+from seers_harness.evolution.trial_signal import (
+    ProductionSignalWindow,
+    concurrency_pressure,
 )
 from seers_harness.evolution.trial_runner import (
     SkillDeltaPatch,
+    run_request_baseline,
     run_request_trial,
     sha256_of_text,
 )
+from seers_harness.evolution.uplift import compute_uplift
 from seers_harness.intake.request_preprocessor import (
     detect_delimiter,
     preprocess_request_from_csv,
@@ -177,6 +192,12 @@ _STAGE_CONFIG: dict[int, tuple[int, int]] = {
     2: (20, 1),
     3: (20, 20),
 }
+
+_DEFAULT_TOKEN_BUDGET_PER_REQUEST = 30_000
+_signal_window = ProductionSignalWindow(max_size=50)
+_trial_rng = random.Random(0)
+_inflight_lock = threading.Lock()
+_inflight_count = 0
 
 
 _DEFAULT_RUNS_ROOT = Path("tests/smoke/.runs")
@@ -517,6 +538,16 @@ def _distill_after_stage1(
         provider=distill_provider,
         node_id="distill_after_stage1",
     )
+    try:
+        flush_evidence(
+            distill_provider.request_log,
+            stage1_request_dir / "distill_evidence",
+        )
+    except Exception as cleanup_exc:
+        print(
+            f"[runner] distill_evidence flush failed: {safe_exc(cleanup_exc)}",
+            file=sys.stderr,
+        )
     artifact = DeltaDistillationArtifact.model_validate(result.artifact)
     print(
         "[runner] distill_after_stage1: "
@@ -531,15 +562,56 @@ def _patch_from_portfolio_row(
     row: DeltaPortfolioRow, live_skill_root: Path
 ) -> SkillDeltaPatch | None:
     if row.change_type != "modify_skill":
+        print(
+            "[runner] trial_skipped "
+            f"delta_id={row.delta_id} "
+            f"reason=non_modify_skill change_type={row.change_type}",
+            file=sys.stderr,
+        )
         return None
     live_target = live_skill_root / row.target_skill
     if not live_target.exists():
+        print(
+            "[runner] trial_skipped "
+            f"delta_id={row.delta_id} "
+            f"reason=target_unresolvable target_skill={row.target_skill}",
+            file=sys.stderr,
+        )
         return None
     live_text = live_target.read_text(encoding="utf-8")
     return SkillDeltaPatch(
         target_path=row.target_skill,
         original_text_sha256=sha256_of_text(live_text),
         replacement_text=row.proposed_change,
+    )
+
+
+def _applicable_surface_for(
+    nodes: Sequence[Any],
+    delta_portfolio: list[DeltaPortfolioRow],
+) -> list[str]:
+    surfaces = [
+        str(getattr(node, "skill_name", "") or getattr(node, "id", ""))
+        for node in nodes
+    ]
+    surfaces = [surface for surface in surfaces if surface]
+    if surfaces:
+        return surfaces
+    fallback: list[str] = []
+    for row in delta_portfolio:
+        fallback.extend(row.applicable_surface)
+    return sorted(set(fallback))
+
+
+def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRuntime) -> None:
+    total_tokens = sum(
+        int((event.get("usage") or {}).get("total_tokens") or 0)
+        for event in runtime.trace
+        if event.get("type") == "tool_loop_summary"
+    )
+    _signal_window.record_baseline_outcome(
+        success=record.get("exception") is None,
+        total_tokens=total_tokens,
     )
 
 
@@ -553,6 +625,8 @@ def _run_one_request(
     events: list[dict],
     delta_portfolio: list[DeltaPortfolioRow],
     live_skill_root: Path,
+    journal_path: Path | None = None,
+    max_concurrent: int = 20,
 ) -> dict[str, Any]:
     """Drive ONE request end-to-end through the harness chain.
 
@@ -570,6 +644,8 @@ def _run_one_request(
     classify it via ``exception_classifier.classify(exc)`` and decide
     fail-fast vs trial-continue per D-19.
     """
+    global _inflight_count
+
     inner_provider = provider_factory()
     request_log: list[dict] = []
     proxy = RecordingProvider(inner_provider, request_log)
@@ -591,6 +667,8 @@ def _run_one_request(
     # Stamp the contextvar with a stable per-request id so any
     # generate_with_tools call that omits node_id still gets stamped.
     token = set_current_node_id(request_id)
+    with _inflight_lock:
+        _inflight_count += 1
     try:
         # Drive the canonical 3-node DAG. ``run_request`` raises on any
         # node failure; we let that propagate so the caller can run the
@@ -636,34 +714,89 @@ def _run_one_request(
             raw = json.loads(Path(p).read_text(encoding="utf-8"))
             model.model_validate(raw)
 
-        for index, portfolio_row in enumerate(delta_portfolio):
-            patch = _patch_from_portfolio_row(portfolio_row, live_skill_root)
-            if patch is None:
-                continue
-            trial_workspace = request_dir / "trial_workspace" / portfolio_row.delta_id
-            trial_outcome = run_request_trial(
-                runtime=WorkflowRuntime(
-                    provider=proxy,
-                    output_dir=trial_workspace / "_artifacts",
+        _record_host_baseline_outcome(record, runtime)
+        with _inflight_lock:
+            inflight = _inflight_count
+        selected_delta_id = select_trial_delta(
+            portfolio=delta_portfolio,
+            applicable_surface=_applicable_surface_for(nodes, delta_portfolio),
+            recent_failure_rate=_signal_window.failure_rate(),
+            token_budget_pressure=_signal_window.token_pressure(
+                budget_per_request=_DEFAULT_TOKEN_BUDGET_PER_REQUEST
+            ),
+            production_pressure=concurrency_pressure(
+                inflight=max(0, inflight - 1),
+                max_concurrent=max_concurrent,
+            ),
+            rng=_trial_rng,
+        )
+        if selected_delta_id is not None:
+            portfolio_row = next(
+                (
+                    row
+                    for row in delta_portfolio
+                    if row.delta_id == selected_delta_id
                 ),
-                scenario=scenario,
-                nodes=list(nodes),
-                live_skill_root=live_skill_root,
-                workspace_dir=trial_workspace,
-                patch=patch,
-                request_id=request_id,
-                scenario_id=str(scenario.get("scenario_id", "")),
-                events=events,
+                None,
             )
-            if trial_outcome.trial_delta_id is not None:
-                record["trial_selected_delta_id"] = trial_outcome.trial_delta_id
-            delta_portfolio[index] = update_after_trial(
-                portfolio_row,
-                success=trial_outcome.success,
-                token_cost_delta=trial_outcome.token_cost_observed,
-            )
+            if portfolio_row is not None:
+                patch = _patch_from_portfolio_row(portfolio_row, live_skill_root)
+                if patch is not None:
+                    trial_root = request_dir / "trial_workspace"
+                    baseline_workspace = trial_root / "_baseline"
+                    baseline_outcome = run_request_baseline(
+                        runtime=WorkflowRuntime(
+                            provider=proxy,
+                            output_dir=baseline_workspace / "_artifacts",
+                        ),
+                        scenario=scenario,
+                        nodes=list(nodes),
+                        live_skill_root=live_skill_root,
+                        workspace_dir=baseline_workspace,
+                        request_id=request_id,
+                        scenario_id=str(scenario.get("scenario_id", "")),
+                        events=events,
+                    )
+                    trial_workspace = trial_root / portfolio_row.delta_id
+                    trial_outcome = run_request_trial(
+                        runtime=WorkflowRuntime(
+                            provider=proxy,
+                            output_dir=trial_workspace / "_artifacts",
+                        ),
+                        scenario=scenario,
+                        nodes=list(nodes),
+                        live_skill_root=live_skill_root,
+                        workspace_dir=trial_workspace,
+                        patch=patch,
+                        request_id=request_id,
+                        scenario_id=str(scenario.get("scenario_id", "")),
+                        events=events,
+                    )
+                    uplift = compute_uplift(
+                        baseline_outcome,
+                        trial_outcome,
+                        budget_tolerance=1_000,
+                    )
+                    record["trial_selected_delta_id"] = selected_delta_id
+                    append_journal_entry(
+                        journal_path or (request_dir.parent / "portfolio_journal.jsonl"),
+                        PortfolioJournalEntry(
+                            request_id=request_id,
+                            delta_id=selected_delta_id,
+                            success=uplift.is_positive,
+                            token_cost_delta=uplift.token_cost_delta,
+                            behavioral_metric_lift=uplift.behavioral_metric_lift,
+                            ts=_utc_now_iso(),
+                        ),
+                    )
+                    _signal_window.record_baseline_outcome(
+                        success=baseline_outcome.success,
+                        total_tokens=baseline_outcome.token_cost_observed,
+                    )
 
     finally:
+        with _inflight_lock:
+            _inflight_count = max(0, _inflight_count - 1)
         # Always restore the contextvar even on exception, then flush
         # whatever evidence was captured before the failure scene.
         try:
@@ -768,6 +901,8 @@ def _run_stage(
                     events=events,
                     delta_portfolio=delta_portfolio,
                     live_skill_root=live_skill_root,
+                    journal_path=out_dir / "portfolio_journal.jsonl",
+                    max_concurrent=concurrency,
                 )
                 records.append(record)
             except BaseException as exc:
@@ -824,6 +959,8 @@ def _run_stage(
                     events=per_request_events[rid],
                     delta_portfolio=delta_portfolio,
                     live_skill_root=live_skill_root,
+                    journal_path=out_dir / "portfolio_journal.jsonl",
+                    max_concurrent=concurrency,
                 ): rid
                 for rid in stage_request_ids
             }
@@ -916,6 +1053,19 @@ def _run_stage(
         concurrency=concurrency,
     )
     write_batch_summary(stage_dir / "index.json")
+    journal_path = out_dir / "portfolio_journal.jsonl"
+    if journal_path.exists():
+        entries = read_journal_entries(journal_path)
+        token_costs_by_delta: dict[str, list[int]] = {}
+        for entry in entries:
+            token_costs_by_delta.setdefault(entry.delta_id, []).append(
+                entry.token_cost_delta
+            )
+        delta_portfolio[:] = fold_portfolio_journal(journal_path, delta_portfolio)
+        delta_portfolio[:] = apply_status_transitions(
+            delta_portfolio,
+            token_cost_deltas_by_delta=token_costs_by_delta,
+        )
 
     # A stage passes only when every submitted request produced a
     # record without an exception (and the run did not abort early).
@@ -936,6 +1086,62 @@ def _run_stage(
 
 def _utc_now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _bootstrap_portfolio_from_current_trace(
+    *,
+    request_ids: Sequence[str],
+    scenario_loader: ScenarioLoader,
+    nodes: Sequence[Any],
+    provider_factory: ProviderFactory,
+    out_dir: Path,
+    live_skill_root: Path,
+) -> list[DeltaPortfolioRow]:
+    """Build a distill portfolio for stage-only acceptance runs.
+
+    Phase 8's C4 path forbids hardcoded seed deltas: the portfolio must come
+    from a real trajectory. A ``--stage 3`` process starts with an empty
+    portfolio, so run one current-code bootstrap request and distill that trace
+    before the requested stage starts.
+    """
+    if not request_ids:
+        raise RuntimeError("stage-only bootstrap requires at least one request_id")
+
+    rid = request_ids[0]
+    bootstrap_stage_dir = out_dir / "portfolio_bootstrap"
+    request_dir = bootstrap_stage_dir / _safe_request_dirname(rid)
+    events: list[dict] = []
+    print(
+        f"[runner] portfolio bootstrap: request_id={rid}",
+        file=sys.stderr,
+    )
+    record = _run_one_request(
+        request_id=rid,
+        scenario=scenario_loader(rid),
+        nodes=nodes,
+        provider_factory=provider_factory,
+        request_dir=request_dir,
+        events=events,
+        delta_portfolio=[],
+        live_skill_root=live_skill_root,
+        journal_path=out_dir / "portfolio_journal.jsonl",
+        max_concurrent=1,
+    )
+    stage1_result = StageResult(
+        stage=1,
+        passed=record.get("exception") is None,
+        records=[record],
+        stage_dir=bootstrap_stage_dir,
+        started_at=_utc_now_iso(),
+        finished_at=_utc_now_iso(),
+    )
+    if not stage1_result.passed:
+        raise RuntimeError("portfolio bootstrap request failed")
+    return _distill_after_stage1(
+        stage1_result=stage1_result,
+        provider_factory=provider_factory,
+        current_portfolio=[],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1212,20 @@ def run(
         f"n_request_ids={len(request_ids)} out_dir={out_dir}",
         file=sys.stderr,
     )
+
+    if 1 not in stages and any(stage in stages for stage in (2, 3)):
+        delta_portfolio = _bootstrap_portfolio_from_current_trace(
+            request_ids=request_ids,
+            scenario_loader=scenario_loader,
+            nodes=nodes,
+            provider_factory=provider_factory,
+            out_dir=out_dir,
+            live_skill_root=LIVE_SKILL_ROOT,
+        )
+        print(
+            f"[runner] portfolio bootstrap: deltas={len(delta_portfolio)}",
+            file=sys.stderr,
+        )
 
     for stage in stages:
         if stage not in _STAGE_CONFIG:

@@ -52,6 +52,11 @@ _DIGIT_UNIT = re.compile(r"\d\s*(?:折|元|件|瓶|盒|份|月|年|天|号|%)")
 
 _CN_TOKEN_RE = re.compile(r"[一-鿿]{2,}")
 _CAT3_BRAND_SEARCH_KEY_RE = re.compile(r"(cat3|brand|search)", re.IGNORECASE)
+_FACTOR_TEXT_FIELD_DESCRIPTION = (
+    "Free-text reasoning field. Avoid ASCII double quote characters inside "
+    "the value; use Chinese quote marks or paraphrase instead so strict "
+    "tool-call JSON remains valid."
+)
 
 
 def _resolve_path(payload: dict[str, Any], dotted_path: str) -> bool:
@@ -473,14 +478,23 @@ RECORD_FACTOR_SPEC: dict = {
             ],
             "properties": {
                 "factor_id": {"type": "string"},
-                "user_side_signal": {"type": "string"},
+                "user_side_signal": {
+                    "type": "string",
+                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                },
                 "direction": {
                     "type": "string",
                     "enum": ["user_to_need", "item_to_need", "cross"],
                 },
                 "evidence_paths": {"type": "array", "items": {"type": "string"}},
-                "bridge_to_product": {"type": "string"},
-                "transferable_disposition": {"type": "string"},
+                "bridge_to_product": {
+                    "type": "string",
+                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                },
+                "transferable_disposition": {
+                    "type": "string",
+                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                },
                 "covers_product_ids": {"type": "array", "items": {"type": "string"}},
             },
         },
@@ -530,7 +544,10 @@ SUBMIT_FACTORS_FINAL_SPEC: dict = {
                         ],
                         "properties": {
                             "factor_id": {"type": "string"},
-                            "user_side_signal": {"type": "string"},
+                            "user_side_signal": {
+                                "type": "string",
+                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                            },
                             "direction": {
                                 "type": "string",
                                 "enum": ["user_to_need", "item_to_need", "cross"],
@@ -547,8 +564,14 @@ SUBMIT_FACTORS_FINAL_SPEC: dict = {
                                     },
                                 },
                             },
-                            "bridge": {"type": "string"},
-                            "transferable_disposition": {"type": "string"},
+                            "bridge": {
+                                "type": "string",
+                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                            },
+                            "transferable_disposition": {
+                                "type": "string",
+                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
+                            },
                             "covers_product_ids": {"type": "array", "items": {"type": "string"}},
                         },
                     },

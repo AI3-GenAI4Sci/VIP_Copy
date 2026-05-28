@@ -24,6 +24,7 @@ echo them back into durable delta records.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 from pydantic import BaseModel, Field, ValidationError
@@ -58,6 +59,18 @@ _FORBIDDEN_SELF_RATED_KEYS: tuple[str, ...] = (
     "uncertainty",
     "strength",
 )
+_TARGET_SKILL_PATTERN_TEXT = r"^current/[a-z0-9][a-z0-9-]*/SKILL\.md$"
+_TARGET_SKILL_DESCRIPTION = (
+    "Path to the target skill file relative to the live skill root, format "
+    "'current/<skill-slug>/SKILL.md'. Must resolve to an existing production "
+    "skill (not evolution skills like distill-skill-deltas itself)."
+)
+_TARGET_SKILL_PATTERN = re.compile(_TARGET_SKILL_PATTERN_TEXT)
+_TARGET_SKILL_PROPERTY: dict[str, str] = {
+    "type": "string",
+    "description": _TARGET_SKILL_DESCRIPTION,
+    "pattern": _TARGET_SKILL_PATTERN_TEXT,
+}
 
 
 def _walk_strings(value: Any):
@@ -101,6 +114,18 @@ def _reject_self_rated_keys(args: dict, tool_name: str) -> None:
         )
 
 
+def _validate_target_skill_pattern(target_skill: str, tool_name: str, arg_path: str = "target_skill") -> None:
+    if not _TARGET_SKILL_PATTERN.match(target_skill):
+        raise ToolValidationError(
+            message=(
+                f"target_skill {target_skill!r} must match pattern "
+                "current/<skill-slug>/SKILL.md"
+            ),
+            tool_name=tool_name,
+            arg_path=arg_path,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # record_delta_observation (hand)                                             #
 # --------------------------------------------------------------------------- #
@@ -125,6 +150,7 @@ def record_delta_observation(args: dict, state: dict) -> str:
             message=f"record_delta_observation args invalid: {exc.errors()[:3]}",
             tool_name="record_delta_observation",
         ) from exc
+    _validate_target_skill_pattern(parsed.target_skill, "record_delta_observation")
     if not parsed.target_skill.strip():
         raise ToolValidationError(
             message="record_delta_observation requires non-empty target_skill",
@@ -175,6 +201,7 @@ def record_delta_change(args: dict, state: dict) -> str:
             message=f"record_delta_change args invalid: {exc.errors()[:3]}",
             tool_name="record_delta_change",
         ) from exc
+    _validate_target_skill_pattern(parsed.target_skill, "record_delta_change")
     if parsed.change_type not in ("modify_skill", "add_skill"):
         raise ToolValidationError(
             message=(
@@ -216,6 +243,12 @@ def submit_delta_distillation_final(args: dict, state: dict) -> str:
             message=f"DeltaDistillationArtifact schema invalid: {exc.errors()[:3]}",
             tool_name="submit_delta_distillation_final",
         ) from exc
+    for index, delta in enumerate(artifact.deltas):
+        _validate_target_skill_pattern(
+            delta.target_skill,
+            "submit_delta_distillation_final",
+            arg_path=f"deltas.{index}.target_skill",
+        )
     state["final_artifact"] = artifact.model_dump()
     return "finalized"
 
@@ -254,7 +287,7 @@ RECORD_DELTA_OBSERVATION_SPEC: dict = {
             ],
             "properties": {
                 "delta_id": {"type": "string"},
-                "target_skill": {"type": "string"},
+                "target_skill": dict(_TARGET_SKILL_PROPERTY),
                 "observation": {"type": "string"},
                 "evidence_refs": {
                     "type": "array",
@@ -287,7 +320,7 @@ RECORD_DELTA_CHANGE_SPEC: dict = {
             ],
             "properties": {
                 "delta_id": {"type": "string"},
-                "target_skill": {"type": "string"},
+                "target_skill": dict(_TARGET_SKILL_PROPERTY),
                 "change_type": {
                     "type": "string",
                     "enum": ["modify_skill", "add_skill"],
@@ -340,7 +373,7 @@ SUBMIT_DELTA_DISTILLATION_FINAL_SPEC: dict = {
                         ],
                         "properties": {
                             "delta_id": {"type": "string"},
-                            "target_skill": {"type": "string"},
+                            "target_skill": dict(_TARGET_SKILL_PROPERTY),
                             "change_type": {
                                 "type": "string",
                                 "enum": ["modify_skill", "add_skill"],

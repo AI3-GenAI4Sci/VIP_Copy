@@ -12,7 +12,8 @@ Per-record output layout::
         ├── messages.jsonl      # one JSON object per request message
         ├── tool_calls.jsonl    # one JSON object per observed tool_call
         ├── artifact.json       # the final structured output
-        └── usage.json          # prompt/completion/total tokens + model
+        ├── usage.json          # aggregate prompt/completion/total tokens + model
+        └── usage_turns.jsonl   # one usage row per provider turn
 
 When ``record["node_id"]`` is missing or empty, the writer falls back to
 ``req_<index:04d>`` (preserving the position of the record in the log).
@@ -31,9 +32,11 @@ Per D-22b:
   ``arguments`` (already a dict) or falls back to the response's
   ``raw_response_text`` parsed as JSON, finally falling back to the raw
   response dict so the auditor still has a starting point.
-* ``usage.json`` — ``record["last_usage"]`` (carries
-  ``prompt_tokens``, ``completion_tokens``, ``total_tokens``,
-  ``model``).
+* ``usage_turns.jsonl`` — one ``record["last_usage"]`` row per provider
+  turn for this node.
+* ``usage.json`` — aggregate numeric usage across provider turns, plus
+  ``first`` / ``last`` turn snapshots. This prevents later submit/reflection
+  turns from overwriting the first-turn prompt evidence.
 
 Per D-22b the writer is best-effort post-mortem: a single malformed
 record logs to ``stderr`` and continues, because the stage runner has
@@ -64,17 +67,25 @@ def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
     base = Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
 
+    grouped: dict[str, list[tuple[int, dict]]] = {}
     for index, record in enumerate(request_log):
+        fallback = f"req_{index:04d}"
+        node_id = _sanitise_node_id(record.get("node_id"), fallback)
+        grouped.setdefault(node_id, []).append((index, record))
+
+    for node_id, indexed_records in grouped.items():
         try:
-            _flush_one(record, base, index)
+            _flush_many(indexed_records, base, node_id)
         except Exception:
             # Best-effort post-mortem (D-22b): print to stderr and
             # continue. The stage runner already failed-fast at request
             # level (D-02), so a write failure here must not eclipse
             # the genuine evidence on disk.
+            first_record = indexed_records[0][1] if indexed_records else {}
             sys.stderr.write(
-                f"[evidence_writer] failed to flush record index={index} "
-                f"node_id={_safe_str(record, 'node_id')}\n"
+                f"[evidence_writer] failed to flush record "
+                f"index={indexed_records[0][0] if indexed_records else '<none>'} "
+                f"node_id={_safe_str(first_record, 'node_id')}\n"
             )
             traceback.print_exc(file=sys.stderr)
 
@@ -82,6 +93,11 @@ def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
 def _flush_one(record: dict, base: Path, index: int) -> None:
     fallback = f"req_{index:04d}"
     node_id = _sanitise_node_id(record.get("node_id"), fallback)
+    _flush_many([(index, record)], base, node_id)
+
+
+def _flush_many(indexed_records: list[tuple[int, dict]], base: Path, node_id: str) -> None:
+    records = [record for _index, record in indexed_records]
 
     node_dir = base / node_id
     # Defence-in-depth (CR-04): even after _sanitise_node_id, refuse
@@ -98,22 +114,59 @@ def _flush_one(record: dict, base: Path, index: int) -> None:
     node_dir.mkdir(parents=True, exist_ok=True)
 
     # messages.jsonl — one line per request message
-    messages = record.get("messages") or []
+    messages: list[Any] = []
+    for record in records:
+        messages.extend(record.get("messages") or [])
     _write_jsonl(node_dir / "messages.jsonl", messages)
 
     # tool_calls.jsonl — one line per observed tool_call. Empty file
     # when the response had no tool_calls (the auditor expects the file
     # to exist regardless so the per-node layout is uniform).
-    tool_calls = record.get("tool_calls") or []
+    tool_calls: list[Any] = []
+    for record in records:
+        tool_calls.extend(record.get("tool_calls") or [])
     _write_jsonl(node_dir / "tool_calls.jsonl", tool_calls)
 
     # artifact.json — final structured output, with fallback
-    artifact = _resolve_artifact(record)
+    artifact = _resolve_artifact(records[-1] if records else {})
     _write_json(node_dir / "artifact.json", artifact)
 
-    # usage.json — prompt_tokens / completion_tokens / total_tokens / model
-    usage = record.get("last_usage") or {}
-    _write_json(node_dir / "usage.json", usage)
+    # usage_turns.jsonl + usage.json — preserve per-turn evidence while
+    # keeping the legacy aggregate file path downstream readers already use.
+    usage_turns = [
+        usage
+        for record in records
+        if isinstance((usage := record.get("last_usage") or {}), dict)
+    ]
+    _write_jsonl(node_dir / "usage_turns.jsonl", usage_turns)
+    _write_json(node_dir / "usage.json", _aggregate_usage(usage_turns))
+
+
+def _aggregate_usage(turns: list[dict[str, Any]]) -> dict[str, Any]:
+    if not turns:
+        return {}
+    aggregate: dict[str, Any] = {"turn_count": len(turns)}
+    numeric_keys = sorted(
+        {
+            key
+            for turn in turns
+            for key, value in turn.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+    )
+    for key in numeric_keys:
+        aggregate[key] = sum(
+            turn.get(key, 0)
+            for turn in turns
+            if isinstance(turn.get(key), (int, float))
+            and not isinstance(turn.get(key), bool)
+        )
+    model = turns[-1].get("model")
+    if model is not None:
+        aggregate["model"] = model
+    aggregate["first"] = turns[0]
+    aggregate["last"] = turns[-1]
+    return aggregate
 
 
 def _sanitise_node_id(raw: Any, fallback: str) -> str:
