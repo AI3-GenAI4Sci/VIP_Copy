@@ -1,94 +1,62 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-27T17:20:14.245Z",
+  "timestamp": "2026-05-28T02:00:00.000Z",
   "phase": "08",
   "phase_name": "evolution-wiring-and-runner-debt",
   "phase_dir": ".planning/phases/08-evolution-wiring-and-runner-debt",
   "plan": "gap-closure",
-  "task": 0,
-  "total_tasks": 6,
+  "task": "08-G2-T2",
+  "total_tasks": 5,
   "status": "paused",
   "completed_tasks": [
-    {"id": "08-01..08-11", "name": "Phase-8 production-side hardening + cleanup (timeout/env-file/failure_class/runner-cleanup/wiring/IN-01/M1-M5/backoff/drain/finally/narrow)", "status": "done", "commit": "3e6965b"},
+    {"id": "08-01..08-11", "name": "Phase-8 production-side hardening + cleanup", "status": "done", "commit": "3e6965b"},
     {"id": "pre-batch-fix", "name": "request_preprocessor module-level hoist", "status": "done", "commit": "cbb6c5e"},
-    {"id": "real-llm-batch", "name": "Phase-8 real-LLM batch on cbb6c5e — Stage 1 PASSED, Stage 2 10/20 done, SIGTERM at STOP B (zero trials)", "status": "done", "commit": "224a91a"},
-    {"id": "F-08-A", "name": "25 personalization angles derived bottom-up from 11 user payloads", "status": "done", "commit": "224a91a"},
-    {"id": "F-08-B", "name": "Root cause: dag_runner.py:84 skill_bundle=\"SKILL_BODY\" literal — 3 production nodes naked", "status": "done", "commit": "224a91a"},
-    {"id": "F-08-C", "name": "Root cause: copy_payload_for strips user_state; cache_miss=120 tokens at copy_generation", "status": "done", "commit": "224a91a"},
-    {"id": "F-08-D", "name": "Delta mechanism redesign: orphan map of 06-02 functions + 6 gap-closure plans 09-01..09-06 with real bandit / Wilson LCB / journal-then-fold / paired-control uplift", "status": "done", "commit": "224a91a"}
+    {"id": "real-llm-batch-0527", "name": "Phase-8 real-LLM batch on cbb6c5e — Stage 1 PASSED, Stage 2 10/20, SIGTERM at STOP B", "status": "done", "commit": "224a91a"},
+    {"id": "F-08-A..D", "name": "Four root-cause investigations (B=naked LLM, C=context strip, A=25 angles, D=delta redesign)", "status": "done", "commit": "224a91a"},
+    {"id": "pause-work", "name": "HANDOFF.json + .continue-here.md", "status": "done", "commit": "07729c4"},
+    {"id": "08-G1..G5-PLAN", "name": "5 gap-closure plans written (G1+G2 by gsd-planner, G3+G4+G5 by orchestrator after subagent API drops)", "status": "done", "commit": "66ebf05"},
+    {"id": "08-G1", "name": "Unified SKILL loader primitive — fix F-08-B (3 production nodes + distill now use single load_skill_prose entry; SKILL_BODY literal removed; pytest 334 green)", "status": "done", "commit": "a215264"},
+    {"id": "08-G2-T1", "name": "Context disclosure analysis (300-line research doc enumerating 40+ fields with entropy + F-08-A dimension mapping + optimal boundary proposal)", "status": "done", "commit": "33eda34"},
+    {"id": "08-G2-T1-signoff", "name": "User sign-off on field boundary, SKILL line 41 rewrite, cache_miss target [500,5000]", "status": "done", "commit": "6650872"}
   ],
   "remaining_tasks": [
-    {"id": "08-G1", "name": "SKILL loader unification — single harness primitive (the binding to fixed nodes is an extension class/hook, NOT hardcoded in dag_runner)", "status": "not_started"},
-    {"id": "08-G2", "name": "Context disclosure boundary research + fix — copy_payload_for / rubric_payload_for; treat as information-theoretic problem (cache-hit vs information density), not blanket whitelist", "status": "not_started"},
-    {"id": "08-G3", "name": "Distill-skill-deltas dual-track success/failure mining + target_skill format contract (3 sites)", "status": "not_started"},
-    {"id": "08-G4", "name": "Replace deterministic loop with select_trial_delta + ProductionSignalWindow + paired control + journal-then-fold (F-08-D 09-01..09-05 condensed into phase-8 gap-closure)", "status": "not_started"},
-    {"id": "08-G5", "name": "Re-run real-LLM batch — Stage 1 + Stage 2 + Stage 3 (Stage 3 c=20 is closest to production; one-shot validation of all fixes)", "status": "not_started"},
-    {"id": "08-13-closeout", "name": "07-WRIN-TRIAGE.md + 08-VERIFICATION.md", "status": "not_started"}
+    {"id": "08-G2-T2", "name": "IMPL: copy_payload_for + rubric_payload_for + SKILL line 41 per CONTEXT_DISCLOSURE_ANALYSIS.md §3 + §4 field set", "status": "not_started"},
+    {"id": "08-G3", "name": "Distill SKILL prose rewrite (dual-track success/failure) + target_skill 3-site contract + distill evidence persistence", "status": "not_started"},
+    {"id": "08-G4", "name": "Bandit replacement (select_trial_delta + ProductionSignalWindow + paired control + journal-then-fold + Wilson 95% LCB status_machine)", "status": "not_started"},
+    {"id": "08-G5", "name": "Real DeepSeek Stage 3 (n=20, c=20) acceptance batch + 08-VERIFICATION.md + close 07-WRIN-TRIAGE.md (autonomous=false, user spot-check)", "status": "not_started"}
   ],
   "blockers": [
     {
-      "description": "F-08-B (dag_runner SKILL loader missing) blocks the entire pipeline — no skill prose reaches LLM nodes. Must fix before any further evolution work has signal.",
+      "description": "G2-T2 is the immediate next action — Task 1 sign-off已批准。impl 直接按 CONTEXT_DISCLOSURE_ANALYSIS.md §3 + §4 翻译为 payloads.py + SKILL line 41 改动。",
       "type": "technical",
-      "workaround": "08-G1 fix lifts this; F-08-A/C/D all become actionable after 08-G1 lands."
-    },
-    {
-      "description": "F-08-C (copy_payload_for strips user_state) compounds with F-08-B — even with SKILL prose, copy node sees only 120 tokens of new info. Must NOT be solved by blanket whitelist; treat as cache-density problem.",
-      "type": "technical",
-      "workaround": "08-G2 research first (information-theoretic boundary), implement second."
+      "workaround": "已被 sign-off 解锁"
     }
   ],
   "human_actions_pending": [
     {
-      "action": "Confirm 08-G1 / 08-G2 design before implementation begins (loader shape; context disclosure boundary research outcome).",
-      "context": "User explicitly said skills loader must be a single harness primitive (NOT hardcoded), context disclosure must research cache-hit vs information density before writing the fix.",
+      "action": "G5 acceptance batch 中 user 必须 spot-check 5 reqs 的 copy_generation 文案质量 — autonomous=false,只在 G5 触发",
+      "context": "G5 是 phase-8 唯一剩余 checkpoint",
       "blocking": false
     }
   ],
   "decisions": [
-    {
-      "decision": "Gap-closure stays inside phase 08, no phase 09. Findings F-08-A..D drive 08-G1..G5 work.",
-      "rationale": "User explicit: \"不要开 phase 9，就在这个 phase 解决\".",
-      "phase": "08"
-    },
-    {
-      "decision": "SKILL loader is a single harness primitive; the binding from fixed nodes to fixed skills is implemented as an extension class or hook on top of that primitive — not hardcoded literals.",
-      "rationale": "User explicit: \"skills loader 的机制必须统一为一个，我们所有的扩展都建立在基础的 harness 基建上\".",
-      "phase": "08"
-    },
-    {
-      "decision": "Context disclosure (F-08-C fix) is an information-theoretic problem; before writing code, research the cache-hit / information-density boundary. Do not blanket-pass user_state.",
-      "rationale": "User explicit: \"context 的披露是不是可以仔细研究一下，可能和缓存命中也相关，信息量上过多或者少都是不可取的\".",
-      "phase": "08"
-    },
-    {
-      "decision": "SKILL prose must NOT contain the user's examples or analogies; instead the agent re-expresses the user's intent in unified, fluent terminology.",
-      "rationale": "User explicit: \"切忌在设计 skills 时把举例和比方写进去，正确做法是你理解我的意图随后用你认为更统一和通顺的词汇和说法来构筑\".",
-      "phase": "08"
-    },
-    {
-      "decision": "After fixes land, re-run real-LLM directly to Stage 3 (skip dedicated stage-1/2 re-validation runs; Stage 3 c=20 is closest to production and validates all fixes one-shot).",
-      "rationale": "User explicit: \"修复后直接跑 stage3，因为 stage3 是最接近生产实际的情景，可以一次性检验所有问题\".",
-      "phase": "08"
-    },
-    {
-      "decision": "Subagent dispatch for gap-closure execution must use opus / xhigh reasoning intensity.",
-      "rationale": "User explicit: \"按照 skills 需求派发 subagent 时应注意推理强度为 xhigh\". model=\"claude-opus-4-7\" passed to Agent() calls.",
-      "phase": "08"
-    },
-    {
-      "decision": "GSD orchestration drives this work — main agent orchestrates, dispatches gsd-* subagents per skill needs, runs end-to-end without stopping until Stage 3 batch completes.",
-      "rationale": "User explicit: \"按照 gsd 的流程来做这些事... 不要停止，直到 stage3 跑完\".",
-      "phase": "08"
-    }
+    {"decision": "Stay in phase 8 (no phase 9)", "rationale": "User explicit: \"不要开 phase 9，就在这个 phase 解决\"", "phase": "08"},
+    {"decision": "SKILL loader is single harness primitive; node→skill binding is extension layer", "rationale": "User explicit: \"skills loader 的机制必须统一为一个\"", "phase": "08"},
+    {"decision": "Context disclosure is info-theoretic; ANALYSIS doc precedes impl with sign-off gate", "rationale": "User explicit: \"context 的披露是不是可以仔细研究一下\"", "phase": "08"},
+    {"decision": "SKILL prose uses unified terminology, never user verbatim examples", "rationale": "User explicit: \"切忌在设计 skills 时把举例和比方写进去\"", "phase": "08"},
+    {"decision": "Real mechanisms only; signals from runtime-observable sources", "rationale": "User explicit: \"所有的模块必须是真机制\"", "phase": "08"},
+    {"decision": "Acceptance is real DeepSeek Stage 3 only (skip Stage 1/2)", "rationale": "User explicit: \"修复后直接跑 stage3\"", "phase": "08"},
+    {"decision": "Run-without-stop until Stage 3 PASSED + user copy spot-check", "rationale": "User explicit: \"不要停止，直到 stage3 跑完\"; the only remaining checkpoint after G2 sign-off is G5 user spot-check", "phase": "08"},
+    {"decision": "G2 sign-off APPROVED 2026-05-28 — proceed to G2-T2", "rationale": "User said \"approve\" to the field boundary proposal", "phase": "08"}
   ],
   "uncommitted_files": [
     "workflow-skills/current/discover-personalization-factors/SKILL.md (pre-existing dirty)",
-    "workflow-skills/current/generate-copy-candidates/SKILL.md (pre-existing dirty)",
+    "workflow-skills/current/generate-copy-candidates/SKILL.md (pre-existing dirty — G2-T2 will rewrite line 41, may conflict; check git diff before editing)",
     "workflow-skills/current/personalized-copy-rubric-judge/SKILL.md (pre-existing dirty)",
     ".claude/ (local, untracked)",
     ".planning/config.json (local, untracked)",
     ".planning/phases/07-real-llm-validation/.run-logs/ (untracked, ephemeral)"
   ],
-  "next_action": "Run /gsd-plan-phase 08 --gaps with findings F-08-A..D as input. Planner reads .planning/phases/08-evolution-wiring-and-runner-debt/findings/F-08-{A,B,C,D}*.md and produces 08-G1..G5 gap-closure plans. Then /gsd-execute-phase 08 --gaps-only with model=opus on subagents. After implementation lands and pytest is green, launch real-LLM batch directly to Stage 3.",
-  "context_notes": "Phase 8 is a runner-touch sweep that turned into a deeper investigation. The key shift: I previously saw F-08-01 (delta wiring broken) as the issue, but parallel investigations B/C/D showed F-08-01 is the symptom. F-08-B (LLM naked, no SKILL prose) is the deepest root cause — every observation about template copy, factor bimodality, low diversity flows from production nodes receiving 10-byte 'SKILL_BODY' literal instead of skill prose. F-08-C compounds it (no user_state at copy node). Once both fix, F-08-A's 25 angles become reachable and F-08-D's bandit/uplift mechanism has clean signal to work on. Don't fall into surface-patching — each fix must be at the architectural seam, not the line that raised the symptom. SKILL prose rewrite must use unified terminology, never the user's example phrases verbatim. Stage 3 c=20 batch is the acceptance gate."
+  "next_action": "Resume by executing 08-G2-T2 (impl per signed-off CONTEXT_DISCLOSURE_ANALYSIS.md §3 + §4). Then G3 → G4 → G5 unbroken. NOTE: pre-existing dirty SKILL.md files in workflow-skills/current/ — G2-T2 touches generate-copy-candidates/SKILL.md line 41; check `git diff workflow-skills/current/generate-copy-candidates/SKILL.md` first to see what the user's prior edits did and decide keep / overwrite.",
+  "context_notes": "Phase 8 gap-closure is mid-way. G1 (SKILL loader unification) shipped clean — fixed F-08-B, 334 pytest tests green, SKILL_BODY literal gone, single load_skill_prose primitive in skill_loader.py. G2-T1 (research doc) shipped + user signed off. G2-T2 (impl) is the immediate next step — translate CONTEXT_DISCLOSURE_ANALYSIS.md §3.1/3.2/3.3 into copy_payload_for + rubric_payload_for + SKILL line 41 changes. After G2-T2, G3+G4+G5 run autonomous per user 'don't stop' instruction; only G5 has a final user checkpoint (manual copy quality spot-check on 5 sample reqs).\n\nSubagent reliability has been mixed — three of four parallel investigations dropped with API ECONNRESET / 402 / upstream stream disconnected during the planning + execution phase. Mitigation: for plans where specs are concrete enough (G3/G4/G5 plans + analysis docs), the orchestrator wrote them directly; for code execution (G1) the subagent path worked. Suggestion for new session: keep subagent prompts SHORT and let them write to disk EARLY (Write first, Edit later) to survive API drops mid-stream.\n\nThe pre-existing dirty 3 SKILL.md files in workflow-skills/current/ should be inspected via `git diff` before G2-T2/G3 touch them — the user has prior modifications that may align or conflict with the gap-closure prose rewrites."
 }
