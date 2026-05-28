@@ -21,6 +21,8 @@ This rerun shows the G2/G3 recovery path advanced beyond the previous failure:
 
 It also exposed a remaining runner evidence gap: request-level `evolution_snapshot.json` files did not record the visible bootstrap portfolio, so Stage 3 snapshots still showed `delta_portfolio_before: []` and `trials: []`. A local TDD fix now writes the visible portfolio IDs at request start; this requires a rerun after DeepSeek balance is restored.
 
+A follow-up verifier audit found a stricter blocker: trial workspaces were patched on disk, but the runtime still read production SKILL prose for model prompts. Local TDD fixes now route patched trials through an isolated temp skill root, keep baseline/control prompts on the production root, exclude baseline/control from `trials[]`, include `delta_id` on trial snapshot rows, and write artifact-derived behavioral metric lift into journal entries. This also requires a fresh real Stage 3 rerun.
+
 Evidence:
 - Run log: `.planning/phases/08-evolution-wiring-and-runner-debt/.run-logs/runner-20260528T055154Z.log`
 - Stage artifact dir: `tests/smoke/.runs/20260528T055154Z/stage3/`
@@ -64,8 +66,9 @@ The runner then drained in-flight requests and wrote partial artifacts. The new 
 1. Stage 3 fail-fast remains an acceptance blocker until DeepSeek balance is restored and a new run passes.
 2. Copy-generation cache-miss evidence is now aggregated correctly, but the observed partial-run mean is above the signed [500, 5000] band; this must be rechecked in the next successful run.
 3. Trial triggering still has not passed real acceptance; local TDD fix now records visible portfolios in snapshots so the next run can distinguish selection pressure from portfolio propagation.
-4. DeepSeek 402 was misclassified as `runner_bug`; local TDD fix now routes 402 / insufficient balance to non-retryable `auth`.
-5. `07-WRIN-TRIAGE.md` cannot be closed until a new Stage 3 acceptance run passes.
+4. Trial patching was previously not wired into model prompts; local TDD fix now points patched trials at an isolated temp skill root and keeps baseline/control out of `trials[]`.
+5. DeepSeek 402 was misclassified as `runner_bug`; local TDD fix now routes 402 / insufficient balance to non-retryable `auth`.
+6. `07-WRIN-TRIAGE.md` cannot be closed until a new Stage 3 acceptance run passes.
 
 ## Closure
 
@@ -73,6 +76,7 @@ Phase 8 status: `gaps_found`.
 
 Next action is a GSD recovery pass, not Phase 8 pass/closeout:
 - commit the local snapshot visibility and 402 classification fixes after full tests pass;
+- commit the trial skill-root / baseline snapshot / behavioral-uplift audit fixes after full tests pass;
 - restore DeepSeek account balance / API quota;
 - rerun real DeepSeek Stage 3 with `set -o pipefail`;
 - verify cache-miss band, non-empty visible portfolio snapshots, trial triggering, and journal/status transitions;

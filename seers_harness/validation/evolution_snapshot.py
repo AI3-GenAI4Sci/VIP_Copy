@@ -86,10 +86,17 @@ def write_evolution_snapshot(
                 delta_portfolio_after = list(after)
         elif event_type == "trial_succeeded":
             trial_id = event.get("trial_id", "")
-            trials.append({"trial_id": trial_id, "status": "succeeded"})
+            entry: dict[str, Any] = {"trial_id": trial_id, "status": "succeeded"}
+            delta_id = event.get("delta_id")
+            if delta_id is not None:
+                entry["delta_id"] = delta_id
+            trials.append(entry)
         elif event_type == "trial_failed":
             trial_id = event.get("trial_id", "")
             entry: dict[str, Any] = {"trial_id": trial_id, "status": "failed"}
+            delta_id = event.get("delta_id")
+            if delta_id is not None:
+                entry["delta_id"] = delta_id
             exc_class = event.get("exception_class")
             if exc_class is not None:
                 entry["exception_class"] = exc_class

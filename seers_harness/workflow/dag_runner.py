@@ -55,6 +55,7 @@ class WorkflowRuntime:
     """
     provider: Any
     output_dir: Path
+    skill_root: Path | None = None
     trace: list[dict[str, Any]] = field(default_factory=list)
     records: list[dict[str, Any]] = field(default_factory=list)
 
@@ -80,9 +81,14 @@ class WorkflowRuntime:
                     node_id=node.id, scenario=scenario,
                     dependency_payloads=deps, session_id=session_id,
                 )
+                skill_bundle = (
+                    load_skill_prose(node.skill_name, skill_root=self.skill_root)
+                    if self.skill_root is not None
+                    else load_skill_prose(node.skill_name)
+                )
                 result = run_skill_via_tools(
                     skill_name=node.skill_name,
-                    skill_bundle=load_skill_prose(node.skill_name),
+                    skill_bundle=skill_bundle,
                     payload=base_payload.get("scenario") or base_payload,
                     tools_spec=TOOLS_SPEC[node.skill_name],
                     tool_handlers=TOOL_HANDLERS,

@@ -64,6 +64,14 @@ def test_env_file_no_shell_expansion(monkeypatch, tmp_path):
     assert os.environ["BAR"] == "$FOO"
 
 
+def test_trial_rng_seed_reads_env(monkeypatch):
+    monkeypatch.setenv("SEERS_TRIAL_RNG_SEED", "7")
+
+    seeded = runner._make_trial_rng()
+
+    assert seeded.random() == runner.random.Random(7).random()
+
+
 def _valid_delta_row(
     *,
     delta_id: str = "D-test",
@@ -309,8 +317,7 @@ def test_run_one_request_fires_trial_when_portfolio_nonempty(monkeypatch, tmp_pa
     snapshot = _read_snapshot(request_dir)
     assert record["exception"] is None
     assert snapshot["trials"] == [
-        {"trial_id": "req-trial", "status": "succeeded"},
-        {"trial_id": "req-trial", "status": "succeeded"},
+        {"trial_id": "req-trial", "delta_id": "D-live", "status": "succeeded"},
     ]
     assert record["trial_selected_delta_id"] == "D-live"
     assert read_journal_entries(request_dir.parent / "portfolio_journal.jsonl")
@@ -681,6 +688,8 @@ def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_
     entries = read_journal_entries(journal_path)
     assert len(entries) == 1
     assert entries[0].delta_id == "D-live"
+    assert entries[0].behavioral_metric_lift
+    assert "val01_pass" in entries[0].behavioral_metric_lift
 
 
 def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):

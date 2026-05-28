@@ -44,6 +44,7 @@ from seers_harness.core.errors import (
 )
 from seers_harness.validation.exception_classifier import TrialFailure
 from seers_harness.workflow.dag_runner import NodeSpec, WorkflowRuntime
+from seers_harness.workflow.skill_loader import NODE_SKILL_BINDING
 
 
 # --------------------------------------------------------------------------- #
@@ -67,12 +68,20 @@ class SkillDeltaPatch(BaseModel):
     target_path: str
     original_text_sha256: str
     replacement_text: str
+    delta_id: str | None = None
 
     model_config = {"extra": "forbid"}
 
 
 def sha256_of_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_SKILL_ROOTS: tuple[Path, ...] = (
+    _REPO_ROOT / "workflow-skills" / "current",
+    _REPO_ROOT / "workflow-skills" / "evolution",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +112,7 @@ def apply_delta_patch_temporarily(
     if temp_root.exists():
         shutil.rmtree(temp_root)
     shutil.copytree(live_skill_root, temp_root)
+    _complete_trial_skill_root(temp_root)
 
     original_text: str | None = None
     target_in_temp: Path | None = None
@@ -127,6 +137,19 @@ def apply_delta_patch_temporarily(
     finally:
         if patch is not None and target_in_temp is not None and original_text is not None:
             target_in_temp.write_text(original_text, encoding="utf-8")
+
+
+def _complete_trial_skill_root(temp_root: Path) -> None:
+    """Populate missing known skills so trial reads stay inside temp_root."""
+    for skill_name in set(NODE_SKILL_BINDING.values()):
+        target = temp_root / skill_name
+        if target.exists():
+            continue
+        for source_root in _DEFAULT_SKILL_ROOTS:
+            source = source_root / skill_name
+            if source.exists():
+                shutil.copytree(source, target)
+                break
 
 
 # --------------------------------------------------------------------------- #
@@ -200,7 +223,9 @@ def run_request_trial(
     observed trials in 20 requests is a legitimate VAL-06 outcome.
     """
     trial_delta_id_for_event = (
-        _delta_id_from_patch_or_none(patch) if patch is not None else None
+        patch.delta_id or _delta_id_from_patch_or_none(patch)
+        if patch is not None
+        else None
     )
     outcome = TrialOutcome(
         request_id=request_id,
@@ -217,10 +242,10 @@ def run_request_trial(
             }
         )
 
-    with apply_delta_patch_temporarily(live_skill_root, workspace_dir, patch) as _temp_root:
-        # The temp_root copy is held open so a future skill-loader hook can
-        # be pointed at it; current handlers load skill bundle text via the
-        # provider payload pipeline, so we do not need to swap globals here.
+    previous_skill_root = getattr(runtime, "skill_root", None)
+    with apply_delta_patch_temporarily(live_skill_root, workspace_dir, patch) as temp_root:
+        if patch is not None and hasattr(runtime, "skill_root"):
+            runtime.skill_root = temp_root
         try:
             paths = runtime.run_request(scenario=scenario, nodes=nodes)
             outcome.artifact_paths = dict(paths)
@@ -258,6 +283,9 @@ def run_request_trial(
                         "exception_message": safe_exc_message(exc),
                     }
                 )
+        finally:
+            if patch is not None and hasattr(runtime, "skill_root"):
+                runtime.skill_root = previous_skill_root
 
     if patch is not None:
         outcome.trial_delta_id = trial_delta_id_for_event
@@ -285,6 +313,7 @@ def run_request_baseline(
     events: list[dict] | None = None,
 ) -> TrialOutcome:
     """Run the paired-control baseline path without applying a patch."""
+    _ = events
     return run_request_trial(
         runtime=runtime,
         scenario=scenario,
@@ -294,7 +323,7 @@ def run_request_baseline(
         patch=None,
         request_id=request_id,
         scenario_id=scenario_id,
-        events=events,
+        events=None,
     )
 
 

@@ -166,6 +166,13 @@ from seers_harness.workflow.dag_runner import WorkflowRuntime
 from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
+from seers_harness.validation.machine_judges import (
+    extract_len_covers_product_ids,
+    extract_len_transferable_disposition_text,
+    judge_val01,
+    judge_val02,
+    judge_val04,
+)
 from seers_harness.validation.exception_classifier import (
     classify,
     failure_class,
@@ -195,9 +202,21 @@ _STAGE_CONFIG: dict[int, tuple[int, int]] = {
 
 _DEFAULT_TOKEN_BUDGET_PER_REQUEST = 30_000
 _signal_window = ProductionSignalWindow(max_size=50)
-_trial_rng = random.Random(0)
 _inflight_lock = threading.Lock()
 _inflight_count = 0
+
+
+def _make_trial_rng() -> random.Random:
+    raw_seed = os.environ.get("SEERS_TRIAL_RNG_SEED")
+    if raw_seed is None:
+        return random.Random()
+    try:
+        return random.Random(int(raw_seed))
+    except ValueError:
+        return random.Random(raw_seed)
+
+
+_trial_rng = _make_trial_rng()
 
 
 _DEFAULT_RUNS_ROOT = Path("tests/smoke/.runs")
@@ -583,6 +602,7 @@ def _patch_from_portfolio_row(
         target_path=row.target_skill,
         original_text_sha256=sha256_of_text(live_text),
         replacement_text=row.proposed_change,
+        delta_id=row.delta_id,
     )
 
 
@@ -613,6 +633,35 @@ def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRunti
         success=record.get("exception") is None,
         total_tokens=total_tokens,
     )
+
+
+def _artifact_behavioral_metrics(
+    outcome_artifact_paths: dict[str, Path],
+) -> dict[str, float]:
+    factor_path = outcome_artifact_paths.get("factor_discovery")
+    if factor_path is None or not Path(factor_path).exists():
+        return {}
+    raw = json.loads(Path(factor_path).read_text(encoding="utf-8"))
+    first_factor = (raw.get("factors") or [{}])[0] if isinstance(raw, dict) else {}
+    artifact = {
+        "covers_product_ids": first_factor.get("covers_product_ids", []),
+        "transferable_disposition_text": first_factor.get(
+            "transferable_disposition", ""
+        ),
+        "user_signal": first_factor.get("user_side_signal", "") or "",
+    }
+    val01, _ = judge_val01(artifact)
+    val02, _ = judge_val02(artifact)
+    val04, _ = judge_val04(artifact)
+    return {
+        "val01_pass": float(val01),
+        "val02_pass": float(val02),
+        "val04_pass": float(val04),
+        "covers_product_count": float(extract_len_covers_product_ids(artifact)),
+        "transferable_disposition_length": float(
+            extract_len_transferable_disposition_text(artifact)
+        ),
+    }
 
 
 def _run_one_request(
@@ -764,7 +813,7 @@ def _run_one_request(
                         workspace_dir=baseline_workspace,
                         request_id=request_id,
                         scenario_id=str(scenario.get("scenario_id", "")),
-                        events=events,
+                        events=None,
                     )
                     trial_workspace = trial_root / portfolio_row.delta_id
                     trial_outcome = run_request_trial(
@@ -785,6 +834,12 @@ def _run_one_request(
                         baseline_outcome,
                         trial_outcome,
                         budget_tolerance=1_000,
+                        behavioral_metrics_baseline=_artifact_behavioral_metrics(
+                            baseline_outcome.artifact_paths
+                        ),
+                        behavioral_metrics_trial=_artifact_behavioral_metrics(
+                            trial_outcome.artifact_paths
+                        ),
                     )
                     record["trial_selected_delta_id"] = selected_delta_id
                     append_journal_entry(
