@@ -935,7 +935,8 @@ def test_stage3_cli_acceptance_shape_uses_30_requests_at_concurrency_5(
         captured.append(
             {
                 "stage": kwargs["stage"],
-                "request_count": len(kwargs["request_ids"]),
+                "request_id_count": len(kwargs["request_ids"]),
+                "num_requests": kwargs.get("num_requests"),
                 "concurrency": kwargs.get("concurrency"),
             }
         )
@@ -971,7 +972,8 @@ def test_stage3_cli_acceptance_shape_uses_30_requests_at_concurrency_5(
     assert captured == [
         {
             "stage": 3,
-            "request_count": 30,
+            "request_id_count": 30,
+            "num_requests": 30,
             "concurrency": 5,
         }
     ]

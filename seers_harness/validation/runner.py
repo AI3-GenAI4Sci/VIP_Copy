@@ -971,6 +971,8 @@ def _run_stage(
     batch_id: str,
     delta_portfolio: list[DeltaPortfolioRow],
     live_skill_root: Path,
+    num_requests: int | None = None,
+    concurrency: int | None = None,
 ) -> StageResult:
     """Run one stage and write index.json / batch_summary.json.
 
@@ -983,7 +985,11 @@ def _run_stage(
     ``classify(exc)``-driven routing distinguishes trial-failure (host
     request continues) from provider/infra (fail-fast).
     """
-    n, concurrency = _STAGE_CONFIG[stage]
+    n, stage_concurrency = _STAGE_CONFIG[stage]
+    if num_requests is not None:
+        n = num_requests
+    if concurrency is not None:
+        stage_concurrency = concurrency
     if len(request_ids) < n:
         raise RuntimeError(
             f"stage {stage} requires {n} request_ids, got {len(request_ids)}"
@@ -997,9 +1003,9 @@ def _run_stage(
     records: list[dict[str, Any]] = []
     failure_exc: BaseException | None = None
 
-    print(f"[runner] stage {stage}: n={n} concurrency={concurrency}", file=sys.stderr)
+    print(f"[runner] stage {stage}: n={n} concurrency={stage_concurrency}", file=sys.stderr)
 
-    if concurrency == 1:
+    if stage_concurrency == 1:
         # Serial path — Stage 1 (N=1) and Stage 2 (N=20).
         for i, rid in enumerate(stage_request_ids):
             print(f"[runner] stage {stage} req {i + 1}/{n}: {rid}", file=sys.stderr)
@@ -1020,7 +1026,7 @@ def _run_stage(
                     delta_portfolio=delta_portfolio,
                     live_skill_root=live_skill_root,
                     journal_path=out_dir / "portfolio_journal.jsonl",
-                    max_concurrent=concurrency,
+                    max_concurrent=stage_concurrency,
                 )
                 records.append(record)
             except BaseException as exc:
@@ -1065,7 +1071,7 @@ def _run_stage(
         per_request_events: dict[str, list[dict]] = {
             rid: [] for rid in stage_request_ids
         }
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        with ThreadPoolExecutor(max_workers=stage_concurrency) as pool:
             future_to_rid = {
                 pool.submit(
                     _run_one_request,
@@ -1078,7 +1084,7 @@ def _run_stage(
                     delta_portfolio=delta_portfolio,
                     live_skill_root=live_skill_root,
                     journal_path=out_dir / "portfolio_journal.jsonl",
-                    max_concurrent=concurrency,
+                    max_concurrent=stage_concurrency,
                 ): rid
                 for rid in stage_request_ids
             }
@@ -1168,7 +1174,7 @@ def _run_stage(
         started_at=started_at,
         finished_at=finished_at,
         n=n,
-        concurrency=concurrency,
+        concurrency=stage_concurrency,
     )
     journal_path = out_dir / "portfolio_journal.jsonl"
     if journal_path.exists():
@@ -1280,6 +1286,7 @@ def run(
     scenario_loader: ScenarioLoader | None = None,
     nodes_factory: NodesFactory | None = None,
     provider_factory: ProviderFactory | None = None,
+    concurrency: int | None = None,
 ) -> int:
     """Programmatic entry point. Returns a process exit code.
 
@@ -1361,6 +1368,8 @@ def run(
             batch_id=batch_id,
             delta_portfolio=delta_portfolio,
             live_skill_root=LIVE_SKILL_ROOT,
+            num_requests=num_requests,
+            concurrency=concurrency,
         )
         if not result.passed:
             print(
@@ -1434,6 +1443,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help=(
+            "Override the stage concurrency for this invocation. Phase 09 "
+            "Stage 3 acceptance uses --num-requests 30 --concurrency 5."
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         type=Path,
         default=None,
@@ -1459,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
         out_dir=args.out_dir,
         csv=args.csv,
         num_requests=args.num_requests,
+        concurrency=args.concurrency,
     )
 
 
