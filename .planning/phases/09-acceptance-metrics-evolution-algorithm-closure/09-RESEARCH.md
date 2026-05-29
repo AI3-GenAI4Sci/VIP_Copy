@@ -365,7 +365,7 @@ tests/
 
 **What goes wrong:** The planner tries to push median factor count instead of reading whether factors/copy are distinct, grounded, linked, and staged. [CITED: `09-CONTEXT.md`]  
 **Why it happens:** Phase 8 surfaced `factor_count_p50 = 2.0`, but Phase 9 reclassifies factor count as a record only. [VERIFIED: `.planning/phases/08-evolution-wiring-and-runner-debt/08-VERIFICATION.md`; CITED: `09-CONTEXT.md`]  
-**How to avoid:** Plan a bounded 5-8 request case-reading task with concrete failure-mode notes and only lightweight SKILL/tool-feedback repair if needed. [CITED: `09-CONTEXT.md`]
+**How to avoid:** Plan a bounded 5-8 request case-reading task with concrete failure-mode notes and only lightweight SKILL wording repair unless a later phase explicitly plans tool implementation files and tests. [CITED: `09-CONTEXT.md`]
 
 ## Code Examples
 
@@ -463,22 +463,19 @@ Phase 9 is not a rename/refactor/migration phase, so runtime state inventory is 
 | `tests/smoke/.runs/20260528T170042Z/stage3/*/evolution_snapshot.json` | Snapshots show `trial_gate` with token/production pressure and static `trial_prob`; many token pressures are `1.0`. [VERIFIED: files] | Direct anti-cheat regression target. |
 | `tests/smoke/.runs/20260528T170042Z/stage3/-6834425217442237829/trial_workspace/` | Baseline and patched trial workspaces exist with generation and rubric artifacts. [VERIFIED: file tree] | Mechanism evidence exists; reward extraction should use these artifacts. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Exact evidence-sufficiency threshold**
-   - What we know: CONTEXT delegates exact posterior thresholds and minimum sample counts to the planner. [CITED: `09-CONTEXT.md`]
-   - What's unclear: The numeric rule for “sufficient evidence” and “near decision boundary.” [CITED: `09-CONTEXT.md`]
-   - Recommendation: Choose a small explicit rule in plan Wave 1, test it deterministically, and keep it grounded in rubric win/loss counts only. [CITED: `09-CONTEXT.md`]
+1. **Exact evidence-sufficiency threshold — RESOLVED**
+   - Final decision: Use small explicit evidence rules in Plan 09-01 and pin them with deterministic tests. A delta remains informative when `sample_count < 5`, or when its posterior mean is near the decision boundary (`abs(belief_mean - 0.50) <= 0.10`), or when its lower-bound confidence is not yet decisive. A delta is evidence-sufficient only when it has at least 5 rubric win/loss samples and is not near the boundary. [CITED: `09-CONTEXT.md`; planned in `09-01-PLAN.md`]
+   - Scope guardrail: These thresholds are exploration evidence thresholds only. They are not trial-count targets, factor-count gates, token gates, or production concurrency gates. [CITED: `D9-EVO-01..06`, `D9-MET-03/04/06`]
 
-2. **Status transition token-cost handling**
-   - What we know: `apply_status_transitions` blocks promotion when token-cost p95 exceeds a default max. [VERIFIED: `seers_harness/evolution/status_machine.py`]
-   - What's unclear: D9 forbids token/cost as exploration inputs and hard acceptance gates; it also says lifecycle thresholds are based on rubric wins/losses only, which likely means token should not block status promotion. [CITED: `09-CONTEXT.md`]
-   - Recommendation: Planner should decide explicitly to remove token-cost lifecycle blocking or demote it to observability-only status metadata. [MEDIUM confidence: interpretation of D9-EVO-10 plus D9-MET-06]
+2. **Status transition token-cost handling — RESOLVED**
+   - Final decision: Remove token-cost lifecycle blocking. `apply_status_transitions` should promote/reject/hold from rubric win/loss posterior evidence only: `sample_count`, `success_count`, `failure_count`, and lower-bound thresholds. Token cost may remain visible as observability metadata, but it must not block promotion, decide reward, or affect exploration. [CITED: `D9-EVO-10`, `D9-MET-06`; planned in `09-02-PLAN.md`]
+   - Scope guardrail: Token/cost and cache metrics are records only and never Phase 9 acceptance gates. [CITED: `D9-MET-06`]
 
-3. **Where to store final folded portfolio for summary**
-   - What we know: Per-request snapshots currently hold pre-fold portfolio rows; `build_behavioral_report` reads request snapshots from `stage_dir`. [VERIFIED: `seers_harness/validation/machine_judges.py`; VERIFIED: `tests/test_08_07_behavioral_metrics.py`]
-   - What's unclear: Whether planner prefers writing a stage-level folded portfolio artifact or changing `write_batch_summary` to accept portfolio state. [ASSUMED]
-   - Recommendation: Prefer the smallest testable API change: allow `write_batch_summary(..., final_portfolio=delta_portfolio)` or write a stage-level folded portfolio before summary and have `build_behavioral_report` read it. [ASSUMED]
+3. **Where to store final folded portfolio for summary — RESOLVED**
+   - Final decision: Use the folded-summary path in Plan 09-03: fold `portfolio_journal.jsonl` into the in-memory portfolio before `write_batch_summary`, then pass folded portfolio state through the summary/report path or write a stage-level folded portfolio artifact if that is the smallest implementation fit. The acceptance requirement is that `batch_summary.json` reads folded posterior state, not raw journal row count. [CITED: `D9-MET-02`, `D9-GATE-02`; planned in `09-03-PLAN.md`]
+   - Scope guardrail: `portfolio_journal.jsonl` remains raw event evidence. M5 is accepted only when `sample_count > 0`, alpha/beta update, status/posterior evidence, and `batch_summary.json` visibility all come from folded state. [CITED: `D9-MET-02`]
 
 ## Environment Availability
 
