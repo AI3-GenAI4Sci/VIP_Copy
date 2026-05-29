@@ -19,12 +19,12 @@ def _row(
 ) -> DeltaPortfolioRow:
     return DeltaPortfolioRow(
         delta_id="D-1",
-        target_skill="current/generate-copy-candidates/SKILL.md",
+        target_skill="current/personalized-copy-generation/SKILL.md",
         change_type="modify_skill",
         observation="o",
         proposed_change="c",
         evidence_refs=[{"path": "p", "value": None}],
-        applicable_surface=["generate-copy-candidates"],
+        applicable_surface=["personalized-copy-generation"],
         failure_types=[],
         sample_count=sample_count,
         success_count=success_count,
@@ -71,7 +71,7 @@ def test_apply_status_transitions_holds_when_insufficient_samples() -> None:
     assert out[0].status == "experimental"
 
 
-def test_apply_status_transitions_blocks_promotion_on_token_cost() -> None:
+def test_apply_status_transitions_ignores_token_cost_for_promotion() -> None:
     row = _row(sample_count=20, success_count=18, failure_count=2)
 
     out = apply_status_transitions(
@@ -79,4 +79,4 @@ def test_apply_status_transitions_blocks_promotion_on_token_cost() -> None:
         token_cost_deltas_by_delta={"D-1": [5_000, 6_000, 7_000, 8_000, 9_000]},
     )
 
-    assert out[0].status == "experimental"
+    assert out[0].status == "ready_for_review"

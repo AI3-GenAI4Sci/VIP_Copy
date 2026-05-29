@@ -18,21 +18,6 @@ def wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
     return max(0.0, (centre - margin) / denom)
 
 
-def _p95(values: list[int]) -> int:
-    if not values:
-        return 0
-    ordered = sorted(values)
-    index = min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)
-    return int(ordered[index])
-
-
-def _estimated_token_cost_deltas(row: DeltaPortfolioRow) -> list[int]:
-    if row.sample_count <= 0:
-        return []
-    average = int(row.token_cost_delta_sum / row.sample_count)
-    return [average] * row.sample_count
-
-
 def apply_status_transitions(
     portfolio: list[DeltaPortfolioRow],
     *,
@@ -43,7 +28,12 @@ def apply_status_transitions(
     token_cost_p95_max: int = 2_000,
     token_cost_deltas_by_delta: dict[str, list[int]] | None = None,
 ) -> list[DeltaPortfolioRow]:
-    token_cost_deltas_by_delta = token_cost_deltas_by_delta or {}
+    """Transition experimental rows from rubric win/loss posterior evidence only.
+
+    Token-cost arguments are retained for compatibility with older callsites, but
+    token cost is record-only and never gates promotion or rejection.
+    """
+    _ = token_cost_p95_max, token_cost_deltas_by_delta
     transitioned: list[DeltaPortfolioRow] = []
     for row in portfolio:
         if row.status != "experimental":
@@ -51,17 +41,7 @@ def apply_status_transitions(
             continue
 
         lcb = wilson_lcb(row.success_count, row.sample_count)
-        token_deltas = token_cost_deltas_by_delta.get(
-            row.delta_id,
-            _estimated_token_cost_deltas(row),
-        )
-        token_cost_p95 = _p95(token_deltas)
-
-        if (
-            lcb >= lcb_promote
-            and row.sample_count >= samples_promote
-            and token_cost_p95 <= token_cost_p95_max
-        ):
+        if lcb >= lcb_promote and row.sample_count >= samples_promote:
             transitioned.append(row.model_copy(update={"status": "ready_for_review"}))
         elif lcb <= lcb_reject and row.sample_count >= samples_reject:
             transitioned.append(row.model_copy(update={"status": "rejected"}))
