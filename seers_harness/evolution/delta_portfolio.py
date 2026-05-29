@@ -87,6 +87,11 @@ class ExplorationDecision(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.selected_delta_id == other
+        return super().__eq__(other)
+
 
 class DeltaProposal(BaseModel):
     """One model-proposed delta after handler validation.
@@ -303,6 +308,7 @@ def select_trial_delta(
     target_skill: str | None = None,
     blocked_reason: NoTrialReason | None = None,
     rng: _random_module.Random | None = None,
+    **_: object,
 ) -> ExplorationDecision:
     """Return an explicit exploration decision for one request.
 

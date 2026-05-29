@@ -11,6 +11,7 @@ from seers_harness.evolution.delta_portfolio import DeltaPortfolioRow
 from seers_harness.core.errors import ProviderAuthError
 from seers_harness.evolution.portfolio_journal import read_journal_entries
 from seers_harness.validation import runner
+from seers_harness.workflow.dag_runner import NodeSpec
 
 
 def test_env_file_overrides_existing_env(monkeypatch, tmp_path):
@@ -85,8 +86,8 @@ def _valid_delta_row(
         change_type=change_type,
         observation="copy generation needs tighter anchoring",
         proposed_change=proposed_change,
-        evidence_refs=[{"path": "factor_discovery.factors.0", "value": None}],
-        applicable_surface=["copy_generation"],
+        evidence_refs=[{"path": "personalized_copy_generation.factors.0", "value": None}],
+        applicable_surface=["personalized_copy_generation"],
         failure_types=["weak_anchor"],
     )
 
@@ -104,6 +105,45 @@ def _read_snapshot(request_dir):
     return json.loads((request_dir / "evolution_snapshot.json").read_text(encoding="utf-8"))
 
 
+def test_applicable_surface_includes_merged_generation_display_aliases() -> None:
+    surfaces = runner._applicable_surface_for(
+        [
+            NodeSpec(
+                id="personalized_copy_generation",
+                skill_name="personalized-copy-generation",
+                output_model=object,  # type: ignore[arg-type]
+            )
+        ],
+        [],
+    )
+
+    assert "personalized-copy-generation" in surfaces
+    assert "product_detail_card" in surfaces
+    assert "recommendation_feed" in surfaces
+
+
+def test_applicable_surface_includes_delta_surfaces_for_matching_target_skill() -> None:
+    row = _valid_delta_row(
+        target_skill="current/personalized-copy-generation/SKILL.md",
+    ).model_copy(
+        update={"applicable_surface": ["product_relevance", "self_reflection"]}
+    )
+
+    surfaces = runner._applicable_surface_for(
+        [
+            NodeSpec(
+                id="personalized_copy_generation",
+                skill_name="personalized-copy-generation",
+                output_model=object,  # type: ignore[arg-type]
+            )
+        ],
+        [row],
+    )
+
+    assert "product_relevance" in surfaces
+    assert "self_reflection" in surfaces
+
+
 class _FakeRuntime:
     def __init__(self, *, provider, output_dir):
         self.output_dir = output_dir
@@ -111,27 +151,23 @@ class _FakeRuntime:
 
     def run_request(self, *, scenario, nodes):
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        factor = self.output_dir / "factor.json"
-        copy = self.output_dir / "copy.json"
+        generation = self.output_dir / "generation.json"
         rubric = self.output_dir / "rubric.json"
-        factor.write_text(
+        generation.write_text(
             json.dumps(
                 {
                     "factors": [
                         {
                             "factor_id": "f1",
-                            "user_side_signal": "compact",
-                            "transferable_disposition": "prefers short copy",
                             "covers_product_ids": ["p1"],
+                            "signal_pattern": "compact preference signals",
+                            "claim": "prefers short copy",
+                            "mechanism": "the request rewards concise expression",
+                            "manifestation": "responds to direct slogan copy",
+                            "product_fit": "p1 can be framed in a short result line",
+                            "evidence": ["personalized_copy_generation.factors.0"],
                         }
-                    ]
-                }
-            ),
-            encoding="utf-8",
-        )
-        copy.write_text(
-            json.dumps(
-                {
+                    ],
                     "candidates": [
                         {
                             "candidate_id": "c1",
@@ -154,6 +190,38 @@ class _FakeRuntime:
                             "product_id": "p1",
                             "copy_text": "Short copy",
                             "factor_id": "f1",
+                            "axis_scores": [
+                                {
+                                    "axis_id": "factor_alignment",
+                                    "score": 4,
+                                    "diagnostic": "aligned",
+                                },
+                                {
+                                    "axis_id": "personalized_distinction",
+                                    "score": 3,
+                                    "diagnostic": "specific enough",
+                                },
+                                {
+                                    "axis_id": "slogan_quality",
+                                    "score": 4,
+                                    "diagnostic": "copy-like",
+                                },
+                                {
+                                    "axis_id": "product_relevance",
+                                    "score": 3,
+                                    "diagnostic": "visible product tie",
+                                },
+                                {
+                                    "axis_id": "naturalness",
+                                    "score": 4,
+                                    "diagnostic": "natural",
+                                },
+                            ],
+                            "total_score": 18,
+                            "main_strength": "concise",
+                            "main_weakness": "thin product detail",
+                            "failure_tags": ["thin_product_detail"],
+                            "decision": "hold",
                         }
                     ]
                 }
@@ -161,8 +229,7 @@ class _FakeRuntime:
             encoding="utf-8",
         )
         return {
-            "factor_discovery": factor,
-            "copy_generation": copy,
+            "personalized_copy_generation": generation,
             "personalized_copy_rubric": rubric,
         }
 
@@ -209,8 +276,7 @@ class _DistillProvider:
 def _write_stage1_evidence(stage_dir):
     request_dir = stage_dir / "req-1"
     for node_id in (
-        "factor_discovery",
-        "copy_generation",
+        "personalized_copy_generation",
         "personalized_copy_rubric",
     ):
         node_dir = request_dir / "evidence" / node_id
@@ -222,11 +288,8 @@ def _write_stage1_evidence(stage_dir):
         node_dir.joinpath("usage.json").write_text(
             json.dumps({"total_tokens": 11}), encoding="utf-8"
         )
-    request_dir.joinpath("evidence/factor_discovery/artifact.json").write_text(
-        json.dumps({"factors": []}), encoding="utf-8"
-    )
-    request_dir.joinpath("evidence/copy_generation/artifact.json").write_text(
-        json.dumps({"candidates": []}), encoding="utf-8"
+    request_dir.joinpath("evidence/personalized_copy_generation/artifact.json").write_text(
+        json.dumps({"factors": [], "candidates": []}), encoding="utf-8"
     )
     request_dir.joinpath("evidence/personalized_copy_rubric/artifact.json").write_text(
         json.dumps({"judgments": []}), encoding="utf-8"
@@ -245,8 +308,8 @@ def _distill_delta(delta_id="D-distilled"):
         "change_type": "modify_skill",
         "observation": "the trajectory missed a reusable anchor",
         "proposed_change": "distilled full replacement text",
-        "evidence_refs": [{"path": "factor_discovery.factors.0", "value": None}],
-        "applicable_surface": ["copy_generation"],
+        "evidence_refs": [{"path": "personalized_copy_generation.factors.0", "value": None}],
+        "applicable_surface": ["personalized_copy_generation"],
         "failure_types": ["weak_anchor"],
     }
 
@@ -325,13 +388,20 @@ def test_run_one_request_fires_trial_when_portfolio_nonempty(monkeypatch, tmp_pa
 
 def test_run_one_request_snapshot_records_visible_portfolio(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
-    monkeypatch.setattr(runner._trial_rng, "random", lambda: 1.0)
     live_skill_root, target, original = _write_live_skill_root(tmp_path)
     portfolio = [
         _valid_delta_row(
             delta_id="D-visible",
             target_skill=target,
             proposed_change=original + "\nVisible portfolio refinement\n",
+        ).model_copy(
+            update={
+                "sample_count": 12,
+                "success_count": 10,
+                "failure_count": 2,
+                "belief_alpha": 11.0,
+                "belief_beta": 3.0,
+            }
         )
     ]
     request_dir = tmp_path / "req"
@@ -352,6 +422,11 @@ def test_run_one_request_snapshot_records_visible_portfolio(monkeypatch, tmp_pat
     assert record["trial_selected_delta_id"] is None
     assert snapshot["delta_portfolio_before"] == ["D-visible"]
     assert snapshot["delta_portfolio_after"] == ["D-visible"]
+    assert snapshot["exploration_decision"]["should_trial"] is False
+    assert (
+        snapshot["exploration_decision"]["no_trial_reason"]
+        == "all_eligible_deltas_evidence_sufficient"
+    )
     assert snapshot["trials"] == []
 
 
@@ -372,7 +447,10 @@ def test_run_one_request_skips_trial_when_portfolio_empty(monkeypatch, tmp_path)
     )
 
     assert record["exception"] is None
-    assert _read_snapshot(request_dir)["trials"] == []
+    snapshot = _read_snapshot(request_dir)
+    assert snapshot["trials"] == []
+    assert snapshot["exploration_decision"]["should_trial"] is False
+    assert snapshot["exploration_decision"]["no_trial_reason"] == "no_eligible_delta"
 
 
 def test_run_one_request_trial_failure_does_not_abort_host(monkeypatch, tmp_path):
@@ -625,16 +703,22 @@ class _AlwaysTrialSignalWindow:
         self.last = {"success": success, "total_tokens": total_tokens}
 
 
-class _SuppressTrialSignalWindow(_AlwaysTrialSignalWindow):
-    def failure_rate(self):
-        return 1.0
-
-
-def test_select_trial_delta_gate_skips_when_signals_high(monkeypatch, tmp_path, capsys):
+def test_run_one_request_records_exploration_decision_when_no_trial(
+    monkeypatch, tmp_path, capsys
+):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
-    monkeypatch.setattr(runner, "_signal_window", _SuppressTrialSignalWindow())
     live_skill_root, target, _original = _write_live_skill_root(tmp_path)
-    portfolio = [_valid_delta_row(delta_id="D-skip", target_skill=target)]
+    portfolio = [
+        _valid_delta_row(delta_id="D-skip", target_skill=target).model_copy(
+            update={
+                "sample_count": 12,
+                "success_count": 10,
+                "failure_count": 2,
+                "belief_alpha": 11.0,
+                "belief_beta": 3.0,
+            }
+        )
+    ]
 
     record = runner._run_one_request(
         request_id="req-skip",
@@ -654,14 +738,18 @@ def test_select_trial_delta_gate_skips_when_signals_high(monkeypatch, tmp_path, 
     assert not (tmp_path / "portfolio_journal.jsonl").exists()
     assert "trial_skipped" not in capsys.readouterr().err
     snapshot = _read_snapshot(tmp_path / "req-skip")
-    assert snapshot["trial_gate"]["selected_delta_id"] is None
-    assert snapshot["trial_gate"]["eligible_delta_count"] == 1
-    assert snapshot["trial_gate"]["trial_prob"] == 0.0
+    assert snapshot["exploration_decision"] == {
+        "should_trial": False,
+        "selected_delta_id": None,
+        "eligible_delta_count": 1,
+        "trigger_reason": None,
+        "no_trial_reason": "all_eligible_deltas_evidence_sufficient",
+    }
+    assert "trial_gate" not in snapshot
 
 
-def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_path):
+def test_run_one_request_exploration_decision_fires_paired_trial(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
-    monkeypatch.setattr(runner, "_signal_window", _AlwaysTrialSignalWindow())
     live_skill_root, target, original = _write_live_skill_root(tmp_path)
     portfolio = [
         _valid_delta_row(
@@ -695,9 +783,14 @@ def test_select_trial_delta_gate_fires_paired_when_signals_low(monkeypatch, tmp_
     assert entries[0].behavioral_metric_lift
     assert "val01_pass" in entries[0].behavioral_metric_lift
     snapshot = _read_snapshot(tmp_path / "req-trial")
-    assert snapshot["trial_gate"]["selected_delta_id"] == "D-live"
-    assert snapshot["trial_gate"]["eligible_delta_count"] == 1
-    assert snapshot["trial_gate"]["trial_prob"] == 1.0
+    assert snapshot["exploration_decision"] == {
+        "should_trial": True,
+        "selected_delta_id": "D-live",
+        "eligible_delta_count": 1,
+        "trigger_reason": "insufficient_sample_count",
+        "no_trial_reason": None,
+    }
+    assert "trial_gate" not in snapshot
 
 
 def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):

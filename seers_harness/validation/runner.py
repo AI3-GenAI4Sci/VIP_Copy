@@ -132,11 +132,13 @@ from typing import Any, Callable, Sequence
 from seers_harness.domain.models import (
     CopyGenerationArtifact,
     FactorDiscoveryArtifact,
+    PersonalizedCopyGenerationArtifact,
     PersonalizedCopyRubricArtifact,
 )
 from seers_harness.evolution.delta_portfolio import (
     DeltaDistillationArtifact,
     DeltaPortfolioRow,
+    ExplorationDecision,
     assemble_portfolio,
     select_trial_delta,
 )
@@ -147,10 +149,7 @@ from seers_harness.evolution.portfolio_journal import (
     read_journal_entries,
 )
 from seers_harness.evolution.status_machine import apply_status_transitions
-from seers_harness.evolution.trial_signal import (
-    ProductionSignalWindow,
-    concurrency_pressure,
-)
+from seers_harness.evolution.trial_signal import ProductionSignalWindow
 from seers_harness.evolution.trial_runner import (
     SkillDeltaPatch,
     run_request_baseline,
@@ -168,7 +167,7 @@ from seers_harness.validation.evidence_writer import flush_evidence
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
 from seers_harness.validation.machine_judges import (
     extract_len_covers_product_ids,
-    extract_len_transferable_disposition_text,
+    extract_len_claim_text,
     judge_val01,
     judge_val02,
     judge_val04,
@@ -200,7 +199,6 @@ _STAGE_CONFIG: dict[int, tuple[int, int]] = {
     3: (20, 20),
 }
 
-_DEFAULT_TOKEN_BUDGET_PER_REQUEST = 30_000
 _signal_window = ProductionSignalWindow(max_size=50)
 _inflight_lock = threading.Lock()
 _inflight_count = 0
@@ -246,9 +244,9 @@ tests inject a synthetic loader."""
 
 
 NodesFactory = Callable[[], Sequence[Any]]
-"""Zero-arg callable returning the 3-node DAG spec. Defaults to
+"""Zero-arg callable returning the default DAG spec. Defaults to
 ``tests.smoke.scripted_full_chain.make_nodes`` (the canonical
-3-node DAG that maps factor_discovery -> copy_generation ->
+2-node DAG that maps personalized_copy_generation ->
 personalized_copy_rubric).
 """
 
@@ -494,8 +492,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
     """Assemble the Stage 1 trace payload handed to distill-skill-deltas."""
     node_ids = (
-        "factor_discovery",
-        "copy_generation",
+        "personalized_copy_generation",
         "personalized_copy_rubric",
     )
     evidence_dir = stage1_request_dir / "evidence"
@@ -511,8 +508,7 @@ def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
 
     return {
         "request_id": stage1_request_dir.name,
-        "factor_discovery": artifacts["factor_discovery"],
-        "copy_generation": artifacts["copy_generation"],
+        "personalized_copy_generation": artifacts["personalized_copy_generation"],
         "personalized_copy_rubric": artifacts["personalized_copy_rubric"],
         "tool_calls_per_node": tool_calls_per_node,
         "usage_per_node": usage_per_node,
@@ -615,12 +611,38 @@ def _applicable_surface_for(
         for node in nodes
     ]
     surfaces = [surface for surface in surfaces if surface]
+    if any(surface in {"personalized-copy-generation", "personalized_copy_generation"} for surface in surfaces):
+        surfaces.extend(["product_detail_card", "recommendation_feed"])
+    for row in delta_portfolio:
+        if _target_skill_matches_surface(row.target_skill, surfaces):
+            surfaces.extend(row.applicable_surface)
     if surfaces:
-        return surfaces
+        return sorted(set(surfaces))
     fallback: list[str] = []
     for row in delta_portfolio:
         fallback.extend(row.applicable_surface)
     return sorted(set(fallback))
+
+
+def _target_skill_matches_surface(target_skill: str, surfaces: Sequence[str]) -> bool:
+    target = str(target_skill or "").replace("\\", "/")
+    if not target:
+        return False
+    candidates: set[str] = set()
+    for surface in surfaces:
+        if not surface:
+            continue
+        candidates.add(surface)
+        candidates.add(surface.replace("_", "-"))
+        candidates.add(surface.replace("-", "_"))
+    for candidate in candidates:
+        if (
+            target == candidate
+            or target.endswith(f"/{candidate}")
+            or target.endswith(f"/{candidate}/SKILL.md")
+        ):
+            return True
+    return False
 
 
 def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRuntime) -> None:
@@ -638,17 +660,15 @@ def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRunti
 def _artifact_behavioral_metrics(
     outcome_artifact_paths: dict[str, Path],
 ) -> dict[str, float]:
-    factor_path = outcome_artifact_paths.get("factor_discovery")
+    factor_path = outcome_artifact_paths.get("personalized_copy_generation")
     if factor_path is None or not Path(factor_path).exists():
         return {}
     raw = json.loads(Path(factor_path).read_text(encoding="utf-8"))
     first_factor = (raw.get("factors") or [{}])[0] if isinstance(raw, dict) else {}
     artifact = {
         "covers_product_ids": first_factor.get("covers_product_ids", []),
-        "transferable_disposition_text": first_factor.get(
-            "transferable_disposition", ""
-        ),
-        "user_signal": first_factor.get("user_side_signal", "") or "",
+        "claim_text": first_factor.get("claim", ""),
+        "signal_pattern": first_factor.get("signal_pattern", "") or "",
     }
     val01, _ = judge_val01(artifact)
     val02, _ = judge_val02(artifact)
@@ -658,41 +678,26 @@ def _artifact_behavioral_metrics(
         "val02_pass": float(val02),
         "val04_pass": float(val04),
         "covers_product_count": float(extract_len_covers_product_ids(artifact)),
-        "transferable_disposition_length": float(
-            extract_len_transferable_disposition_text(artifact)
+        "claim_length": float(
+            extract_len_claim_text(artifact)
         ),
     }
 
 
-def _trial_gate_event(
-    *,
-    portfolio: list[DeltaPortfolioRow],
-    applicable_surface: list[str],
-    recent_failure_rate: float,
-    token_budget_pressure: float,
-    production_pressure: float,
-    selected_delta_id: str | None,
-) -> dict[str, Any]:
-    rfr = max(0.0, min(1.0, recent_failure_rate))
-    tbp = max(0.0, min(1.0, token_budget_pressure))
-    pp = max(0.0, min(1.0, production_pressure))
-    eligible_count = sum(
-        1
-        for row in portfolio
-        if row.status == "experimental"
-        and (
-            not row.applicable_surface
-            or any(s in row.applicable_surface for s in applicable_surface)
-        )
-    )
+def _exploration_decision_event(decision: ExplorationDecision) -> dict[str, Any]:
+    payload = decision.model_dump()
+    payload["type"] = "exploration_decision"
     return {
-        "type": "trial_gate",
-        "recent_failure_rate": rfr,
-        "token_budget_pressure": tbp,
-        "production_pressure": pp,
-        "trial_prob": (1.0 - rfr) * (1.0 - tbp) * (1.0 - pp),
-        "eligible_delta_count": eligible_count,
-        "selected_delta_id": selected_delta_id,
+        key: payload[key]
+        for key in (
+            "type",
+            "should_trial",
+            "selected_delta_id",
+            "eligible_delta_count",
+            "trigger_reason",
+            "no_trial_reason",
+            "posterior_samples",
+        )
     }
 
 
@@ -713,7 +718,7 @@ def _run_one_request(
 
     Builds a fresh inner provider via ``provider_factory`` (so threads
     do not share state — see Phase 6 test_concurrency_smoke), wraps it
-    in ``RecordingProvider`` with a per-request log, runs the 3-node
+    in ``RecordingProvider`` with a per-request log, runs the merged
     DAG, validates artifacts, and flushes evidence.
 
     Returns a record dict shaped for ``write_index`` (07-03 contract):
@@ -760,30 +765,28 @@ def _run_one_request(
                 "counts": {"before": len(portfolio_ids), "after": len(portfolio_ids)},
             }
         )
-        # Drive the canonical 3-node DAG. ``run_request`` raises on any
+        # Drive the default DAG. ``run_request`` raises on any
         # node failure; we let that propagate so the caller can run the
         # D-19 routing.
         result_paths = runtime.run_request(scenario=scenario, nodes=list(nodes))
 
-        # Parse the factor_discovery artifact for the index row's
+        # Parse the merged generation artifact for the index row's
         # extreme-sample columns. Only the first node's artifact carries
         # the four E1-E4 columns in the current schema (see 07-03
         # machine_judges).
-        factor_path = result_paths.get("factor_discovery")
+        factor_path = result_paths.get("personalized_copy_generation")
         if factor_path is not None and Path(factor_path).exists():
             try:
                 raw = json.loads(Path(factor_path).read_text(encoding="utf-8"))
-                FactorDiscoveryArtifact.model_validate(raw)
+                PersonalizedCopyGenerationArtifact.model_validate(raw)
                 # Promote the FIRST factor (or empty dict) so the row's
-                # extractors (covers / disposition_text / user_signal)
+                # extractors (covers / claim_text / signal_pattern)
                 # find the right keys at the top level.
                 first_factor = (raw.get("factors") or [{}])[0]
                 record["artifact"] = {
                     "covers_product_ids": first_factor.get("covers_product_ids", []),
-                    "transferable_disposition_text": first_factor.get(
-                        "transferable_disposition", ""
-                    ),
-                    "user_signal": first_factor.get("user_side_signal", "") or "",
+                    "claim_text": first_factor.get("claim", ""),
+                    "signal_pattern": first_factor.get("signal_pattern", "") or "",
                 }
             except Exception:
                 # Schema validation / JSON parse failure surfaces as a
@@ -793,9 +796,8 @@ def _run_one_request(
                 traceback.print_exc(file=sys.stderr)
                 raise
 
-        # Validate the other two artifacts so VAL-04 backstop fires.
+        # Validate the remaining artifact so VAL-04 backstop fires.
         for node_id, model in [
-            ("copy_generation", CopyGenerationArtifact),
             ("personalized_copy_rubric", PersonalizedCopyRubricArtifact),
         ]:
             p = result_paths.get(node_id)
@@ -805,36 +807,15 @@ def _run_one_request(
             model.model_validate(raw)
 
         _record_host_baseline_outcome(record, runtime)
-        with _inflight_lock:
-            inflight = _inflight_count
         applicable_surface = _applicable_surface_for(nodes, delta_portfolio)
-        recent_failure_rate = _signal_window.failure_rate()
-        token_budget_pressure = _signal_window.token_pressure(
-            budget_per_request=_DEFAULT_TOKEN_BUDGET_PER_REQUEST
-        )
-        production_pressure = concurrency_pressure(
-            inflight=max(0, inflight - 1),
-            max_concurrent=max_concurrent,
-        )
-        selected_delta_id = select_trial_delta(
+        decision = select_trial_delta(
             portfolio=delta_portfolio,
             applicable_surface=applicable_surface,
-            recent_failure_rate=recent_failure_rate,
-            token_budget_pressure=token_budget_pressure,
-            production_pressure=production_pressure,
             rng=_trial_rng,
         )
-        events.append(
-            _trial_gate_event(
-                portfolio=delta_portfolio,
-                applicable_surface=applicable_surface,
-                recent_failure_rate=recent_failure_rate,
-                token_budget_pressure=token_budget_pressure,
-                production_pressure=production_pressure,
-                selected_delta_id=selected_delta_id,
-            )
-        )
-        if selected_delta_id is not None:
+        events.append(_exploration_decision_event(decision))
+        if decision.should_trial and decision.selected_delta_id is not None:
+            selected_delta_id = decision.selected_delta_id
             portfolio_row = next(
                 (
                     row

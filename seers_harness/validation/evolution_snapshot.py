@@ -69,7 +69,7 @@ def write_evolution_snapshot(
     delta_portfolio_before: list[Any] = []
     delta_portfolio_after: list[Any] = []
     trials: list[dict[str, Any]] = []
-    trial_gate: dict[str, Any] = {}
+    exploration_decision: dict[str, Any] = {}
 
     for event in events:
         if not isinstance(event, dict):
@@ -85,14 +85,13 @@ def write_evolution_snapshot(
                 delta_portfolio_before = list(before)
             if isinstance(after, list):
                 delta_portfolio_after = list(after)
-        elif event_type == "trial_gate":
-            trial_gate = {
-                "recent_failure_rate": event.get("recent_failure_rate"),
-                "token_budget_pressure": event.get("token_budget_pressure"),
-                "production_pressure": event.get("production_pressure"),
-                "trial_prob": event.get("trial_prob"),
-                "eligible_delta_count": event.get("eligible_delta_count"),
+        elif event_type == "exploration_decision":
+            exploration_decision = {
+                "should_trial": event.get("should_trial"),
                 "selected_delta_id": event.get("selected_delta_id"),
+                "eligible_delta_count": event.get("eligible_delta_count"),
+                "trigger_reason": event.get("trigger_reason"),
+                "no_trial_reason": event.get("no_trial_reason"),
             }
         elif event_type == "trial_succeeded":
             trial_id = event.get("trial_id", "")
@@ -124,7 +123,7 @@ def write_evolution_snapshot(
     snapshot = {
         "delta_portfolio_before": delta_portfolio_before,
         "delta_portfolio_after": delta_portfolio_after,
-        "trial_gate": trial_gate,
+        "exploration_decision": exploration_decision,
         "trials": trials,
     }
 
