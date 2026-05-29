@@ -922,6 +922,61 @@ def test_stage3_only_bootstraps_distilled_portfolio_from_current_trace(
     assert [row.delta_id for row in stage_portfolios[0]] == ["D-bootstrap"]
 
 
+def test_stage3_cli_acceptance_shape_uses_30_requests_at_concurrency_5(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(runner, "LIVE_SKILL_ROOT", tmp_path / "workflow-skills")
+    captured: list[dict] = []
+
+    def fake_bootstrap(**_kwargs):
+        return []
+
+    def fake_run_stage(**kwargs):
+        captured.append(
+            {
+                "stage": kwargs["stage"],
+                "request_count": len(kwargs["request_ids"]),
+                "concurrency": kwargs.get("concurrency"),
+            }
+        )
+        return runner.StageResult(
+            stage=kwargs["stage"],
+            passed=True,
+            records=[
+                {
+                    "request_id": "req-0",
+                    "exception": None,
+                    "failure_class": "ok",
+                }
+            ],
+            stage_dir=tmp_path / "stage3",
+        )
+
+    monkeypatch.setattr(runner, "_bootstrap_portfolio_from_current_trace", fake_bootstrap)
+    monkeypatch.setattr(runner, "_run_stage", fake_run_stage)
+
+    assert runner.main(
+        [
+            "--stage",
+            "3",
+            "--out-dir",
+            str(tmp_path / "run"),
+            "--num-requests",
+            "30",
+            "--concurrency",
+            "5",
+        ]
+    ) == 0
+
+    assert captured == [
+        {
+            "stage": 3,
+            "request_count": 30,
+            "concurrency": 5,
+        }
+    ]
+
+
 def test_stage3_fail_fast_drains_inflight(monkeypatch, tmp_path):
     """D8-G-WR-01: Stage 3 fail-fast must drain in-flight futures.
 
