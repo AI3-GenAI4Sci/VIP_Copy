@@ -16,6 +16,9 @@ class PortfolioJournalEntry(BaseModel):
     request_id: str
     delta_id: str
     success: bool
+    baseline_mean_rubric_score: float = 0.0
+    trial_mean_rubric_score: float = 0.0
+    score_delta: float = 0.0
     token_cost_delta: int = 0
     behavioral_metric_lift: dict[str, float] = Field(default_factory=dict)
     ts: str = ""

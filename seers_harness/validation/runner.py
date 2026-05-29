@@ -684,6 +684,14 @@ def _artifact_behavioral_metrics(
     }
 
 
+def _load_rubric_artifact(outcome_artifact_paths: dict[str, Path]) -> PersonalizedCopyRubricArtifact:
+    rubric_path = outcome_artifact_paths.get("personalized_copy_rubric")
+    if rubric_path is None or not Path(rubric_path).exists():
+        return PersonalizedCopyRubricArtifact(judgments=[])
+    raw = json.loads(Path(rubric_path).read_text(encoding="utf-8"))
+    return PersonalizedCopyRubricArtifact.model_validate(raw)
+
+
 def _exploration_decision_event(decision: ExplorationDecision) -> dict[str, Any]:
     payload = decision.model_dump()
     payload["type"] = "exploration_decision"
@@ -857,16 +865,32 @@ def _run_one_request(
                         scenario_id=str(scenario.get("scenario_id", "")),
                         events=events,
                     )
+                    baseline_behavioral_metrics = _artifact_behavioral_metrics(
+                        baseline_outcome.artifact_paths
+                    )
+                    trial_behavioral_metrics = _artifact_behavioral_metrics(
+                        trial_outcome.artifact_paths
+                    )
+                    metric_names = sorted(
+                        set(baseline_behavioral_metrics)
+                        | set(trial_behavioral_metrics)
+                    )
+                    behavioral_metric_lift = {
+                        name: round(
+                            float(trial_behavioral_metrics.get(name, 0.0))
+                            - float(baseline_behavioral_metrics.get(name, 0.0)),
+                            10,
+                        )
+                        for name in metric_names
+                    }
                     uplift = compute_uplift(
-                        baseline_outcome,
-                        trial_outcome,
-                        budget_tolerance=1_000,
-                        behavioral_metrics_baseline=_artifact_behavioral_metrics(
-                            baseline_outcome.artifact_paths
+                        _load_rubric_artifact(baseline_outcome.artifact_paths),
+                        _load_rubric_artifact(trial_outcome.artifact_paths),
+                        token_cost_delta=(
+                            int(trial_outcome.token_cost_observed)
+                            - int(baseline_outcome.token_cost_observed)
                         ),
-                        behavioral_metrics_trial=_artifact_behavioral_metrics(
-                            trial_outcome.artifact_paths
-                        ),
+                        behavioral_metric_lift=behavioral_metric_lift,
                     )
                     record["trial_selected_delta_id"] = selected_delta_id
                     append_journal_entry(
@@ -875,6 +899,9 @@ def _run_one_request(
                             request_id=request_id,
                             delta_id=selected_delta_id,
                             success=uplift.is_positive,
+                            baseline_mean_rubric_score=uplift.baseline_mean_rubric_score,
+                            trial_mean_rubric_score=uplift.trial_mean_rubric_score,
+                            score_delta=uplift.score_delta,
                             token_cost_delta=uplift.token_cost_delta,
                             behavioral_metric_lift=uplift.behavioral_metric_lift,
                             ts=_utc_now_iso(),

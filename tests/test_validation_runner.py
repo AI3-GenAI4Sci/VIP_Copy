@@ -780,6 +780,10 @@ def test_run_one_request_exploration_decision_fires_paired_trial(monkeypatch, tm
     entries = read_journal_entries(journal_path)
     assert len(entries) == 1
     assert entries[0].delta_id == "D-live"
+    assert entries[0].baseline_mean_rubric_score == 18.0
+    assert entries[0].trial_mean_rubric_score == 18.0
+    assert entries[0].score_delta == 0.0
+    assert entries[0].success is False
     assert entries[0].behavioral_metric_lift
     assert "val01_pass" in entries[0].behavioral_metric_lift
     snapshot = _read_snapshot(tmp_path / "req-trial")

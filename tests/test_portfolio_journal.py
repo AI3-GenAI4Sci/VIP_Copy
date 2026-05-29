@@ -17,21 +17,28 @@ from seers_harness.evolution.portfolio_journal import (
 def _row(delta_id: str = "D-1") -> DeltaPortfolioRow:
     return DeltaPortfolioRow(
         delta_id=delta_id,
-        target_skill="current/generate-copy-candidates/SKILL.md",
+        target_skill="current/personalized-copy-generation/SKILL.md",
         change_type="modify_skill",
         observation="o",
         proposed_change="c",
         evidence_refs=[{"path": "p", "value": None}],
-        applicable_surface=["generate-copy-candidates"],
+        applicable_surface=["personalized-copy-generation"],
         failure_types=[],
     )
 
 
-def _entry(delta_id: str = "D-1", success: bool = True, token_cost_delta: int = 0) -> PortfolioJournalEntry:
+def _entry(
+    delta_id: str = "D-1",
+    success: bool = True,
+    token_cost_delta: int = 0,
+) -> PortfolioJournalEntry:
     return PortfolioJournalEntry(
         request_id="R-1",
         delta_id=delta_id,
         success=success,
+        baseline_mean_rubric_score=18.0,
+        trial_mean_rubric_score=21.0 if success else 17.0,
+        score_delta=3.0 if success else -1.0,
         token_cost_delta=token_cost_delta,
         behavioral_metric_lift={"m": 0.1},
         ts="2026-05-28T00:00:00Z",
@@ -71,6 +78,18 @@ def test_fold_portfolio_journal_replays_in_order(tmp_path) -> None:
     assert folded[0].success_count == 2
     assert folded[0].failure_count == 1
     assert folded[0].token_cost_delta_sum == 27
+
+
+def test_journal_entry_persists_rubric_reward_provenance(tmp_path) -> None:
+    path = tmp_path / "portfolio_journal.jsonl"
+    append_journal_entry(path, _entry(success=True))
+
+    entries = read_journal_entries(path)
+
+    assert len(entries) == 1
+    assert entries[0].baseline_mean_rubric_score == 18.0
+    assert entries[0].trial_mean_rubric_score == 21.0
+    assert entries[0].score_delta == 3.0
 
 
 def test_fold_portfolio_journal_missing_journal_returns_original(tmp_path) -> None:
