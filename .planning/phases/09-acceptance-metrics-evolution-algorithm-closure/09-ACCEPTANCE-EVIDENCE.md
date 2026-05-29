@@ -1,8 +1,8 @@
 ---
 phase: 09-acceptance-metrics-evolution-algorithm-closure
 plan: 04
-status: local-gates-passed-real-run-pending
-updated_at: 2026-05-29T16:30:11Z
+status: blocked-real-provider-balance
+updated_at: 2026-05-29T17:08:00Z
 ---
 
 # Phase 09 Acceptance Evidence
@@ -68,36 +68,52 @@ resolved `DEEPSEEK_API_KEY` value is not printed or copied into this ledger.
 
 ## Real Run Status
 
-Real run status: PENDING
+Real run status: BLOCKED
 
-Failure class: N/A
+Failure class: auth
 
-Safe error summary: N/A
+Safe error summary: DeepSeek returned HTTP 402 `Insufficient Balance` during
+Stage 3. The runner fail-fasted and exited non-zero before completing the
+required 30-request concurrency-5 acceptance run.
 
 ## Real Run Artifacts
 
-Real run id: PENDING
+Real run id: 20260529T163211Z
 
-Index path: PENDING
+Index path: `tests/smoke/.runs/20260529T163211Z/stage3/index.json`
 
-Batch summary path: PENDING
+Batch summary path: `tests/smoke/.runs/20260529T163211Z/stage3/batch_summary.json`
 
-Portfolio journal path: PENDING
+Portfolio journal path: `tests/smoke/.runs/20260529T163211Z/portfolio_journal.jsonl`
 
 Sampled request paths:
 
-- PENDING
+- `tests/smoke/.runs/20260529T163211Z/stage3/-2223161019833131686`
+- `tests/smoke/.runs/20260529T163211Z/stage3/-6833651210813617137`
+- `tests/smoke/.runs/20260529T163211Z/stage3/-6833721702418762089`
+- `tests/smoke/.runs/20260529T163211Z/stage3/-6833791596394007611`
+- `tests/smoke/.runs/20260529T163211Z/stage3/-6833932762567548368`
+- `tests/smoke/.runs/20260529T163211Z/stage3/-6834003288630524187`
+
+Partial run facts:
+
+- Command reached portfolio bootstrap and produced 3 proposals.
+- Command started Stage 3 with `n=30 concurrency=5`.
+- `index.json` contains 16 rows before fail-fast: `ok=10`, `auth=6`.
+- `portfolio_journal.jsonl` contains 10 rows.
+- `batch_summary.json` exists but is partial-run evidence only, not acceptance
+  completion evidence.
 
 ## Mechanism Evidence Checklist
 
 | Evidence | Status | Notes |
 |---|---|---|
-| `exploration_decision` for every request | PENDING | Requires real Stage 3 artifacts. |
-| Selected delta when trialing | PENDING | Requires real Stage 3 artifacts. |
-| Trial workspace path when trialing | PENDING | Requires real Stage 3 artifacts. |
-| Portfolio journal row when trialing | PENDING | Requires `portfolio_journal.jsonl`. |
-| Folded posterior `sample_count` / alpha / beta / status evidence | PENDING | Requires folded portfolio state in summary M5 path. |
-| `batch_summary.json` M5 reads folded state | PENDING | Requires real Stage 3 `batch_summary.json`. |
+| `exploration_decision` for every request | BLOCKED | Partial artifacts show 15/16 written snapshots with exploration decisions; the run did not complete all 30 requests. |
+| Selected delta when trialing | PARTIAL | Partial artifacts include 10 trialed snapshot directories. |
+| Trial workspace path when trialing | PARTIAL | Trial workspace evidence exists in partial request directories only. |
+| Portfolio journal row when trialing | PARTIAL | `portfolio_journal.jsonl` contains 10 rows before fail-fast. |
+| Folded posterior `sample_count` / alpha / beta / status evidence | PARTIAL | Partial `batch_summary.json` reports folded `trial_belief_update_count = 3`; not acceptance because run failed. |
+| `batch_summary.json` M5 reads folded state | PARTIAL | M5 read folded partial state; the 30-request run is blocked by provider balance. |
 
 ## Record-Only Metrics
 
@@ -106,11 +122,14 @@ not influence exploration.
 
 | Metric | Observation | Acceptance treatment |
 |---|---:|---|
-| factor_count_p50 | PENDING | record-only |
-| cache miss | PENDING | record-only |
-| token use | PENDING | record-only |
-| observed trial count | PENDING | explained by exploration decisions, not fixed target |
+| factor_count_p50 | 2.0 partial-run observation | record-only |
+| cache miss | Not summarized in partial ledger | record-only |
+| token use | Not summarized in partial ledger | record-only |
+| observed trial count | 10 partial journal rows | explained by exploration decisions, not fixed target |
 
 ## Blockers
 
-None during local gates.
+- Real Stage 3 acceptance is blocked by DeepSeek account balance/quota:
+  provider returned HTTP 402 `Insufficient Balance`.
+- Local gates are complete and green, but D9-GATE-01 is not satisfied because
+  the real 30-request concurrency-5 run did not complete.
