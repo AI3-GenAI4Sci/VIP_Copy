@@ -24,16 +24,16 @@ def test_machine_judges_factor_diversity_jaccard() -> None:
     diverse = [
         {
             "factors": [
-                {"covers_product_ids": ["p1", "p2"], "transferable_disposition": "甲乙"},
-                {"covers_product_ids": ["p3", "p4"], "transferable_disposition": "丙丁"},
+                {"covers_product_ids": ["p1", "p2"], "claim": "甲乙"},
+                {"covers_product_ids": ["p3", "p4"], "claim": "丙丁"},
             ]
         }
     ]
     identical = [
         {
             "factors": [
-                {"covers_product_ids": ["p1"], "transferable_disposition": "甲乙"},
-                {"covers_product_ids": ["p1"], "transferable_disposition": "甲乙"},
+                {"covers_product_ids": ["p1"], "claim": "甲乙"},
+                {"covers_product_ids": ["p1"], "claim": "甲乙"},
             ]
         }
     ]
@@ -46,7 +46,7 @@ def test_machine_judges_factor_diversity_jaccard() -> None:
 
 def test_machine_judges_copy_candidate_count_p50() -> None:
     artifacts = [
-        {"candidates": [{"considered_drafts": ["x"] * n}]}
+        {"candidates": [{}] * n}
         for n in [1, 2, 2, 3, 4]
     ]
     assert compute_copy_candidate_count_p50(artifacts) == 2.0
@@ -91,22 +91,22 @@ def test_build_behavioral_report_happy_path(tmp_path) -> None:
         stage_dir,
         "req-1",
         factors=[
-            {"covers_product_ids": ["p1"], "transferable_disposition": "甲"},
-            {"covers_product_ids": ["p2"], "transferable_disposition": "乙"},
+            {"covers_product_ids": ["p1"], "claim": "甲"},
+            {"covers_product_ids": ["p2"], "claim": "乙"},
         ],
-        draft_counts=[1, 2],
+        candidate_counts=2,
         tool_names=["reflect_on_coverage"],
     )
     _write_request(
         stage_dir,
         "req-2",
         factors=[
-            {"covers_product_ids": ["p3"], "transferable_disposition": "丙"},
-            {"covers_product_ids": ["p4"], "transferable_disposition": "丁"},
-            {"covers_product_ids": ["p5"], "transferable_disposition": "戊"},
-            {"covers_product_ids": ["p6"], "transferable_disposition": "己"},
+            {"covers_product_ids": ["p3"], "claim": "丙"},
+            {"covers_product_ids": ["p4"], "claim": "丁"},
+            {"covers_product_ids": ["p5"], "claim": "戊"},
+            {"covers_product_ids": ["p6"], "claim": "己"},
         ],
-        draft_counts=[3],
+        candidate_counts=3,
         portfolio=[
             {
                 "delta_id": "D1",
@@ -129,7 +129,7 @@ def test_build_behavioral_report_happy_path(tmp_path) -> None:
     }
     assert report["factor_count_p50"] == 3.0
     assert report["factor_diversity_score"] == 1.0
-    assert report["copy_candidate_count_p50"] == 2.0
+    assert report["copy_candidate_count_p50"] == 2.5
     assert report["reflection_triggered_when_underspec_rate"] == 1.0
     assert report["delta_diversity_score"] == {
         "count": 1,
@@ -164,8 +164,8 @@ def test_batch_summary_includes_behavioral_metrics(tmp_path) -> None:
     _write_request(
         stage_dir,
         "req-1",
-        factors=[{"covers_product_ids": ["p1"], "transferable_disposition": "甲"}],
-        draft_counts=[2],
+        factors=[{"covers_product_ids": ["p1"], "claim": "甲"}],
+        candidate_counts=2,
     )
 
     write_batch_summary(stage_dir / "index.json")
@@ -191,7 +191,7 @@ def _write_index(stage_dir, request_ids: list[str]) -> None:
             "VAL-02_pass": True,
             "VAL-03_pass": None,
             "VAL-04_pass": True,
-            "len_transferable_disposition_text": 0,
+            "len_claim_text": 0,
             "reflow_triggered": False,
             "trial_selected_delta_id": None,
             "failure_class": "ok",
@@ -209,30 +209,23 @@ def _write_request(
     request_id: str,
     *,
     factors: list[dict],
-    draft_counts: list[int],
+    candidate_counts: int,
     tool_names: list[str] | None = None,
     portfolio: list[dict] | None = None,
 ) -> None:
     request_dir = stage_dir / request_id
-    factor_dir = request_dir / "evidence/factor_discovery"
-    copy_dir = request_dir / "evidence/copy_generation"
-    factor_dir.mkdir(parents=True, exist_ok=True)
-    copy_dir.mkdir(parents=True, exist_ok=True)
-    (factor_dir / "artifact.json").write_text(
-        json.dumps({"factors": factors}), encoding="utf-8"
-    )
-    (copy_dir / "artifact.json").write_text(
+    generation_dir = request_dir / "evidence/personalized_copy_generation"
+    generation_dir.mkdir(parents=True, exist_ok=True)
+    (generation_dir / "artifact.json").write_text(
         json.dumps(
             {
-                "candidates": [
-                    {"considered_drafts": ["draft"] * count}
-                    for count in draft_counts
-                ]
+                "factors": factors,
+                "candidates": [{"candidate_id": f"c{i}"} for i in range(candidate_counts)],
             }
         ),
         encoding="utf-8",
     )
-    (factor_dir / "tool_calls.jsonl").write_text(
+    (generation_dir / "tool_calls.jsonl").write_text(
         "".join(json.dumps({"name": name}) + "\n" for name in (tool_names or [])),
         encoding="utf-8",
     )

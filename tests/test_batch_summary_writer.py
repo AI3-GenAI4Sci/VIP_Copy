@@ -12,7 +12,7 @@ def _row(node_id: str, failure_class: str) -> dict:
         "VAL-02_pass": True,
         "VAL-03_pass": None,
         "VAL-04_pass": True,
-        "len_transferable_disposition_text": 0,
+        "len_claim_text": 0,
         "reflow_triggered": False,
         "trial_selected_delta_id": None,
         "failure_class": failure_class,

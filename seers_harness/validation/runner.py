@@ -1170,7 +1170,6 @@ def _run_stage(
         n=n,
         concurrency=concurrency,
     )
-    write_batch_summary(stage_dir / "index.json")
     journal_path = out_dir / "portfolio_journal.jsonl"
     if journal_path.exists():
         entries = read_journal_entries(journal_path)
@@ -1184,6 +1183,10 @@ def _run_stage(
             delta_portfolio,
             token_cost_deltas_by_delta=token_costs_by_delta,
         )
+    write_batch_summary(
+        stage_dir / "index.json",
+        final_portfolio=delta_portfolio,
+    )
 
     # A stage passes only when every submitted request produced a
     # record without an exception (and the run did not abort early).

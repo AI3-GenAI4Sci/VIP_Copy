@@ -32,7 +32,7 @@ routed into ``manual_review_queue`` instead.
 manual_review_queue selection rule (D-13, D-12, D-10) — the union of:
 
     (a) rows where ``VAL-03_pass is None`` AND
-        ``len_transferable_disposition_text > 0`` (there is prose to
+        ``len_claim_text > 0`` (there is prose to
         judge per D-13);
     (b) rows where ``reflow_triggered`` is True (D-12 reflow event
         surfaces a case worth reading);
@@ -70,6 +70,8 @@ _MANUAL_REVIEW_QUEUE_CAP = 29
 def write_batch_summary(
     index_path: str | Path,
     out_path: str | Path | None = None,
+    *,
+    final_portfolio: list[Any] | None = None,
 ) -> None:
     """Read ``index_path`` and write the aggregated ``batch_summary.json``.
 
@@ -137,7 +139,7 @@ def write_batch_summary(
         needs_review = False
         # (a) VAL-03 prose-judgement trigger: text present but no verdict
         if row.get("VAL-03_pass") is None:
-            text_len = row.get("len_transferable_disposition_text", 0)
+            text_len = row.get("len_claim_text", 0)
             if isinstance(text_len, int) and text_len > 0:
                 needs_review = True
         # (b) D-12 reflow attribution
@@ -172,7 +174,10 @@ def write_batch_summary(
             "VAL-04": fail_val04,
         },
         "by_failure_class": by_failure_class,
-        "behavioral_metrics": build_behavioral_report(index_path_p.parent),
+        "behavioral_metrics": build_behavioral_report(
+            index_path_p.parent,
+            final_portfolio=final_portfolio,
+        ),
         "manual_review_queue": queue,
     }
 
