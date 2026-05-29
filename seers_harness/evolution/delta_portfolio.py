@@ -24,9 +24,10 @@ metadata. It is the only handoff to the portfolio writer.
 from __future__ import annotations
 
 import json
+import math
 import random as _random_module
 from pathlib import Path
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,6 +50,42 @@ after evidence shows it harms quality or token cost, and
 ``ready_for_review`` only as a future gate marker. Phase 6 never writes
 durably to ``workflow-skills/current/`` — ``ready_for_review`` is bookkeeping.
 """
+
+NoTrialReason = Literal[
+    "no_eligible_delta",
+    "all_eligible_deltas_evidence_sufficient",
+    "all_eligible_deltas_non_experimental",
+    "target_unresolvable",
+    "provider_auth_schema_blocker",
+]
+TriggerReason = Literal[
+    "insufficient_sample_count",
+    "posterior_near_boundary",
+    "insufficient_lower_bound_confidence",
+]
+
+MIN_INFORMATION_SAMPLES = 5
+EVIDENCE_SUFFICIENT_SAMPLES = 10
+DECISION_BOUNDARY_MEAN = 0.5
+NEAR_BOUNDARY_MARGIN = 0.15
+LOWER_BOUND_CONFIDENCE_MIN = 0.55
+
+
+class ExplorationDecision(BaseModel):
+    """Durable per-request trial decision evidence.
+
+    The selector always returns this object so no-trial paths are explicit
+    structural/evidence decisions instead of hidden probability skips.
+    """
+
+    should_trial: bool
+    selected_delta_id: str | None
+    eligible_delta_count: int
+    trigger_reason: TriggerReason | None
+    no_trial_reason: NoTrialReason | None
+    posterior_samples: dict[str, float] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
 
 
 class DeltaProposal(BaseModel):
@@ -221,76 +258,124 @@ def update_after_trial(
 
 
 # --------------------------------------------------------------------------- #
-# Trial selection (Phase 6 plan 06-02 task 01) — D-09, D-26                   #
+# Exploration decision (Phase 9 plan 09-01) — D9-EVO-01..06                  #
 # --------------------------------------------------------------------------- #
+
+
+def _surface_matches(row: DeltaPortfolioRow, applicable_surface: list[str]) -> bool:
+    return not row.applicable_surface or any(
+        surface in row.applicable_surface for surface in applicable_surface
+    )
+
+
+def _wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
+    if total <= 0:
+        return 0.0
+    phat = success / total
+    denom = 1 + z * z / total
+    centre = phat + z * z / (2 * total)
+    margin = z * math.sqrt((phat * (1 - phat) + z * z / (4 * total)) / total)
+    return max(0.0, (centre - margin) / denom)
+
+
+def _information_value_trigger(row: DeltaPortfolioRow) -> TriggerReason | None:
+    if row.sample_count < MIN_INFORMATION_SAMPLES:
+        return "insufficient_sample_count"
+
+    mean = belief_mean(row)
+    if abs(mean - DECISION_BOUNDARY_MEAN) <= NEAR_BOUNDARY_MARGIN:
+        return "posterior_near_boundary"
+
+    lower_bound = _wilson_lcb(row.success_count, row.sample_count)
+    if (
+        row.sample_count < EVIDENCE_SUFFICIENT_SAMPLES
+        or lower_bound < LOWER_BOUND_CONFIDENCE_MIN
+    ):
+        return "insufficient_lower_bound_confidence"
+
+    return None
 
 
 def select_trial_delta(
     portfolio: list[DeltaPortfolioRow],
     *,
     applicable_surface: list[str],
-    recent_failure_rate: float,
-    token_budget_pressure: float,
-    production_pressure: float,
+    target_skill: str | None = None,
+    blocked_reason: NoTrialReason | None = None,
     rng: _random_module.Random | None = None,
-) -> Optional[str]:
-    """Return one delta id to trial, or ``None`` to skip the trial.
+) -> ExplorationDecision:
+    """Return an explicit exploration decision for one request.
 
-    Selection is intentionally lightweight (D-25): a deterministic priority
-    weight per applicable delta plus an injected ``rng`` for the no-trial
-    coin flip. The weight rewards sample scarcity and posterior belief, so
-    rarely sampled deltas surface before well-evidenced ones (D-08, D-09).
-
-    Trial probability falls when recent failure rate is high (caller-side
-    failure pressure), when token budget is tight, and when production
-    pressure is high (D-09). All inputs are clipped to ``[0, 1]``; values
-    out of range are coerced rather than raising — selection is best-effort.
-
-    Eligibility:
-      * ``status`` must be ``"experimental"``;
-      * ``applicable_surface`` must overlap the row's ``applicable_surface``
-        (an empty row surface is treated as universally applicable so the
-        first proposal can still be trialed before tagging is complete).
+    Eligible experimental deltas are filtered by target/applicable surface.
+    A trial is triggered only while posterior evidence remains informative;
+    when it triggers, the selected delta is the highest Thompson posterior
+    sample from ``rng.betavariate(alpha, beta)``.
     """
+    if blocked_reason is not None:
+        return ExplorationDecision(
+            should_trial=False,
+            selected_delta_id=None,
+            eligible_delta_count=0,
+            trigger_reason=None,
+            no_trial_reason=blocked_reason,
+            posterior_samples={},
+        )
     if rng is None:
         rng = _random_module.Random()
 
-    rfr = max(0.0, min(1.0, recent_failure_rate))
-    tbp = max(0.0, min(1.0, token_budget_pressure))
-    pp = max(0.0, min(1.0, production_pressure))
-
-    # No-trial gate: each pressure independently lowers trial probability.
-    trial_prob = (1.0 - rfr) * (1.0 - tbp) * (1.0 - pp)
-    if rng.random() >= trial_prob:
-        return None
-
-    eligible = [
+    applicable_rows = [
         row
         for row in portfolio
-        if row.status == "experimental"
-        and (
-            not row.applicable_surface
-            or any(s in row.applicable_surface for s in applicable_surface)
-        )
+        if _surface_matches(row, applicable_surface)
+        and (target_skill is None or row.target_skill == target_skill)
     ]
+    if not applicable_rows:
+        return ExplorationDecision(
+            should_trial=False,
+            selected_delta_id=None,
+            eligible_delta_count=0,
+            trigger_reason=None,
+            no_trial_reason="no_eligible_delta",
+            posterior_samples={},
+        )
+
+    eligible = [row for row in applicable_rows if row.status == "experimental"]
     if not eligible:
-        return None
+        return ExplorationDecision(
+            should_trial=False,
+            selected_delta_id=None,
+            eligible_delta_count=0,
+            trigger_reason=None,
+            no_trial_reason="all_eligible_deltas_non_experimental",
+            posterior_samples={},
+        )
 
-    weights: list[float] = []
-    for row in eligible:
-        scarcity = 1.0 / (1.0 + row.sample_count)  # >0; scarce rows weighted higher
-        weights.append(scarcity * (belief_mean(row) + 0.1))
+    trigger_reasons = [
+        reason for row in eligible if (reason := _information_value_trigger(row))
+    ]
+    if not trigger_reasons:
+        return ExplorationDecision(
+            should_trial=False,
+            selected_delta_id=None,
+            eligible_delta_count=len(eligible),
+            trigger_reason=None,
+            no_trial_reason="all_eligible_deltas_evidence_sufficient",
+            posterior_samples={},
+        )
 
-    total = sum(weights)
-    if total <= 0:
-        return rng.choice(eligible).delta_id
-    pick = rng.random() * total
-    acc = 0.0
-    for row, w in zip(eligible, weights):
-        acc += w
-        if pick < acc:
-            return row.delta_id
-    return eligible[-1].delta_id
+    samples = {
+        row.delta_id: float(rng.betavariate(row.belief_alpha, row.belief_beta))
+        for row in eligible
+    }
+    selected_delta_id = max(samples, key=samples.get)
+    return ExplorationDecision(
+        should_trial=True,
+        selected_delta_id=selected_delta_id,
+        eligible_delta_count=len(eligible),
+        trigger_reason=trigger_reasons[0],
+        no_trial_reason=None,
+        posterior_samples=samples,
+    )
 
 
 # --------------------------------------------------------------------------- #
