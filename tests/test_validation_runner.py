@@ -824,6 +824,10 @@ def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):
 
     assert result.passed is True
     assert portfolio[0].sample_count == 1
+    summary = json.loads(
+        (tmp_path / "stage2" / "batch_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["behavioral_metrics"]["trial_belief_update_count"] == 1
 
 
 def test_run_drives_distill_only_after_stage1_passes(monkeypatch, tmp_path):
