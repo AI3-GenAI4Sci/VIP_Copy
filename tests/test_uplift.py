@@ -1,74 +1,103 @@
 from __future__ import annotations
 
-from seers_harness.evolution.trial_runner import TrialOutcome
+from seers_harness.domain.models import (
+    PersonalizedCopyRubricArtifact,
+    PersonalizedCopyRubricJudgment,
+    RubricAxisScore,
+)
 from seers_harness.evolution.uplift import compute_uplift
 
 
-def _outcome(*, success: bool, tokens: int) -> TrialOutcome:
-    return TrialOutcome(request_id="R-1", success=success, token_cost_observed=tokens)
+def _axis(axis_id: str, score: int) -> RubricAxisScore:
+    return RubricAxisScore(axis_id=axis_id, score=score, diagnostic=f"{axis_id} ok")
 
 
-def test_uplift_strict_positive() -> None:
+def _artifact(*totals: int) -> PersonalizedCopyRubricArtifact:
+    judgments = []
+    for index, total in enumerate(totals):
+        remaining = total
+        scores = []
+        for _ in range(5):
+            score = min(5, remaining)
+            scores.append(score)
+            remaining -= score
+        axis_scores = [
+            _axis("factor_alignment", scores[0]),
+            _axis("personalized_distinction", scores[1]),
+            _axis("slogan_quality", scores[2]),
+            _axis("product_relevance", scores[3]),
+            _axis("naturalness", scores[4]),
+        ]
+        judgments.append(
+            PersonalizedCopyRubricJudgment(
+                candidate_id=f"c{index}",
+                candidate_index=index,
+                product_id=f"p{index}",
+                copy_text="copy",
+                factor_id=f"f{index}",
+                axis_scores=axis_scores,
+                total_score=total,
+                decision="hold",
+                main_strength="s",
+                main_weakness="w",
+                failure_tags=[],
+            )
+        )
+    return PersonalizedCopyRubricArtifact(judgments=judgments)
+
+
+def test_uplift_positive_only_when_trial_mean_score_is_strictly_greater() -> None:
     uplift = compute_uplift(
-        _outcome(success=False, tokens=1_200),
-        _outcome(success=True, tokens=1_000),
-        behavioral_metrics_baseline={"anchor_diversity": 0.2},
-        behavioral_metrics_trial={"anchor_diversity": 0.3},
+        _artifact(18, 20),
+        _artifact(22, 22),
+        token_cost_delta=9999,
+        behavioral_metric_lift={"coverage": -1.0},
     )
 
-    assert uplift.success_lift == 1
-    assert uplift.token_cost_delta == -200
-    assert uplift.behavioral_metric_lift == {"anchor_diversity": 0.1}
+    assert uplift.baseline_mean_rubric_score == 19.0
+    assert uplift.trial_mean_rubric_score == 22.0
+    assert uplift.score_delta == 3.0
+    assert uplift.token_cost_delta == 9999
+    assert uplift.behavioral_metric_lift == {"coverage": -1.0}
     assert uplift.is_positive is True
 
 
-def test_uplift_token_blow_up_blocks() -> None:
+def test_uplift_equal_mean_is_failure_even_with_record_only_improvements() -> None:
     uplift = compute_uplift(
-        _outcome(success=False, tokens=1_000),
-        _outcome(success=True, tokens=3_000),
-        budget_tolerance=1_000,
-        behavioral_metrics_baseline={"m": 0.0},
-        behavioral_metrics_trial={"m": 1.0},
+        _artifact(20, 20),
+        _artifact(19, 21),
+        token_cost_delta=-500,
+        behavioral_metric_lift={"coverage": 1.0},
     )
 
-    assert uplift.token_cost_delta == 2_000
+    assert uplift.baseline_mean_rubric_score == 20.0
+    assert uplift.trial_mean_rubric_score == 20.0
+    assert uplift.score_delta == 0.0
     assert uplift.is_positive is False
 
 
-def test_uplift_no_behavioral_lift_blocks() -> None:
+def test_uplift_lower_mean_is_failure_even_if_tokens_and_behavior_improve() -> None:
     uplift = compute_uplift(
-        _outcome(success=True, tokens=1_000),
-        _outcome(success=True, tokens=1_000),
-        behavioral_metrics_baseline={"m1": 0.2, "m2": 0.5},
-        behavioral_metrics_trial={"m1": 0.15, "m2": 0.5},
+        _artifact(24, 24),
+        _artifact(20, 22),
+        token_cost_delta=-800,
+        behavioral_metric_lift={"diversity": 0.5},
     )
 
-    assert uplift.success_lift == 0
-    assert uplift.behavioral_metric_lift == {"m1": -0.05, "m2": 0.0}
+    assert uplift.baseline_mean_rubric_score == 24.0
+    assert uplift.trial_mean_rubric_score == 21.0
+    assert uplift.score_delta == -3.0
     assert uplift.is_positive is False
 
 
-def test_uplift_regression_blocks() -> None:
+def test_uplift_empty_judgments_are_zero_mean() -> None:
     uplift = compute_uplift(
-        _outcome(success=True, tokens=1_000),
-        _outcome(success=False, tokens=900),
-        behavioral_metrics_baseline={"m": 0.1},
-        behavioral_metrics_trial={"m": 0.2},
+        PersonalizedCopyRubricArtifact(judgments=[]),
+        PersonalizedCopyRubricArtifact(judgments=[]),
     )
 
-    assert uplift.success_lift == -1
+    assert uplift.baseline_mean_rubric_score == 0.0
+    assert uplift.trial_mean_rubric_score == 0.0
+    assert uplift.score_delta == 0.0
+    assert uplift.behavioral_metric_lift == {}
     assert uplift.is_positive is False
-
-
-def test_uplift_empty_metrics_falls_back_to_strict_lift() -> None:
-    neutral = compute_uplift(
-        _outcome(success=True, tokens=1_000),
-        _outcome(success=True, tokens=900),
-    )
-    positive = compute_uplift(
-        _outcome(success=False, tokens=1_000),
-        _outcome(success=True, tokens=900),
-    )
-
-    assert neutral.is_positive is False
-    assert positive.is_positive is True
