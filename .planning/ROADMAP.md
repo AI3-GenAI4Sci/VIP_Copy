@@ -117,3 +117,17 @@ goals.
 Proceed in numeric order. Phase 4 may be completed before broader cleanup. Phase
 6 depends on Phase 5; Phase 7 depends on Phase 6; Phase 8 unblocks the Phase 7
 real-LLM acceptance gate.
+
+### Phase 9: Acceptance Metrics & Evolution Algorithm Closure
+
+**Goal:** Close the acceptance-metrics and evolution-algorithm gaps with explicit exploration decisions, rubric-only reward provenance, folded posterior evidence, bounded merged-node case reading, and a real 30-request concurrency-5 validation run.
+**Requirements**: Decision-traced via D9-EVO, D9-MET, D9-MERGE, D9-GATE in `09-CONTEXT.md`
+**Depends on:** Phase 8
+**Plans:** 5/5 plans complete
+
+Plans:
+- [x] 09-01-PLAN.md — Replace pressure/probability trial gating with explicit exploration decisions and Thompson selection.
+- [x] 09-02-PLAN.md — Switch posterior reward and lifecycle evidence to rubric-only provenance.
+- [x] 09-03-PLAN.md — Wire exploration, rubric reward, folded M5 summary, and Phase 09 run shape into the runner.
+- [x] 09-04-PLAN.md — Add anti-cheat acceptance gates and record real 30-request concurrency-5 evidence.
+- [x] 09-05-PLAN.md — Perform bounded merged-node case reading and apply only lightweight SKILL repair if evidence requires it.

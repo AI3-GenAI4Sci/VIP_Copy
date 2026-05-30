@@ -2,24 +2,27 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-28T07:40:44.000Z"
+status: milestone_complete
+last_updated: 2026-05-30T05:06:52.370Z
 progress:
-  total_phases: 8
-  completed_phases: 3
-  total_plans: 29
-  completed_plans: 27
-  percent: 38
+  total_phases: 9
+  completed_phases: 9
+  total_plans: 43
+  completed_plans: 43
+  percent: 100
+stopped_at: Milestone complete (Phase 09 was final phase)
 ---
 
 # Project State
 
 ## Current Position
 
-Phase: 08 (evolution-wiring-and-runner-debt) — EXECUTING, G5 gaps_found
-Plan: gap-closure recovery
+Phase: 09 (acceptance-metrics-evolution-algorithm-closure) - COMPLETE
+Plan: Phase complete
 
-- Focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batches `20260528T032645Z`, `20260528T055154Z`, and `20260528T070707Z` failed.
+- Focus: Phase 09 closed the acceptance-metrics and evolution-algorithm gaps with real DeepSeek run `20260530T022014Z`, verification status `passed`, and 9/9 must-haves verified.
+- Final verification: `.planning/phases/09-acceptance-metrics-evolution-algorithm-closure/09-VERIFICATION.md`; local suite reported 399 tests passed.
+- Prior focus: recover Phase 8 gap-closure after real DeepSeek Stage 3 batches `20260528T032645Z`, `20260528T055154Z`, and `20260528T070707Z` failed.
 - Verified baseline: G1 committed; G2-G4 recovery committed in `ca1ea21` with summaries closed in `c98989e`; full local suite now reports 381 tests passed.
 - Latest recovery: batch `20260528T055154Z` proved Stage3-only bootstrap now reaches distillation and produces 3 deltas, then Stage 3 failed fast on DeepSeek `402 Insufficient Balance`. Local TDD fixes now record visible runtime portfolios in request snapshots and classify 402 / insufficient balance as non-retryable `auth`.
 - 2026-05-28 audit follow-up: independent GSD verifier found trial patching was not actually wired into model prompts. Fixed with TDD: `WorkflowRuntime` now supports an isolated trial skill root, `run_request_trial` points patched trials at that root, baseline/control no longer writes trial snapshot events, trial snapshot rows include `delta_id`, uplift journal entries include artifact-derived behavioral metrics, and trial RNG can be seeded via `SEERS_TRIAL_RNG_SEED` for reproducibility.
@@ -39,6 +42,7 @@ Plan: gap-closure recovery
 | 6. Evolution Chain + Production Hardening | 5 | `06-01-SUMMARY.md` … `06-05-SUMMARY.md` |
 | 7. Real-LLM Validation (REOPENED — blocked on phase 8) | 6 plans delivered + 11 fix-now commits (CR-01..05 + 7 WR/IN) | `07-WRIN-TRIAGE.md` now blocked again: 7 scheduled items cannot close until Phase 8 Stage 3 passes. |
 | 8. Runner ↔ Evolution Wiring + Runner-Debt Cleanup + Phase-7 Real-LLM Hardening | G1 committed; G2-G4 recovery committed; G5 rerun pending | `ca1ea21`, `c98989e`; prior `08-VERIFICATION.md` status `gaps_found`; batch `20260528T032645Z`; `08-G5-SUMMARY.md`. |
+| 9. Acceptance Metrics & Evolution Algorithm Closure | 5 | `09-01-SUMMARY.md` … `09-05-SUMMARY.md`; verification `passed`; real run `20260530T022014Z`. |
 
 ## Active Watchlist
 
@@ -160,9 +164,9 @@ Plan: gap-closure recovery
 
 ## Session Continuity
 
-Last session: 2026-05-28T05:26:54Z
-Stopped at: Session resumed; proceeding to Phase 8 G5 recovery.
-Resume file: `.planning/HANDOFF.json` plus `.planning/phases/08-evolution-wiring-and-runner-debt/.continue-here.md`
+Last session: 2026-05-30T05:06:52.370Z
+Stopped at: Milestone complete (Phase 09 was final phase)
+Resume file: .planning/phases/09-acceptance-metrics-evolution-algorithm-closure/09-VERIFICATION.md
 
 ## Resume Instruction
 
@@ -174,6 +178,7 @@ Phase 7 remains blocked on Phase 8. Phase 8 reached G5 but real DeepSeek Stage
 ```bash
 
 # 1. Read current recovery evidence
+
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-VERIFICATION.md
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/08-G5-SUMMARY.md
 $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/.run-logs/g5-verification-20260528T032645Z.txt
@@ -181,10 +186,12 @@ $EDITOR .planning/phases/08-evolution-wiring-and-runner-debt/.run-logs/g5-verifi
 # 2. G2-G4 commit-chain anomaly repaired in ca1ea21/c98989e.
 
 # 3. Stage 3 recovery fixes landed; rerun tests, then rerun real Stage 3:
+
 .venv/bin/python -m pytest -q
 .venv/bin/python -u -m seers_harness.validation.runner --env-file .env.local --stage 3
 
 # 4. Only after automated gates pass, perform G5 user spot-check and close WRIN.
+
 ```
 
 The next invocation should drive Phase 8 recovery. Phase 7 acceptance gate stays open until Stage 3 passes, `evolution_snapshot.json` carries non-empty `trials[]`, case analysis/user spot-check passes, and `07-WRIN-TRIAGE.md` moves the 7 scheduled items to real phase-8 commit references.
@@ -205,3 +212,9 @@ Phase 8 charter: `workspace/.planning/phases/08-evolution-wiring-and-runner-debt
 | Phase 08 P05 | 24min | 3 tasks | 2 files |
 | Phase 08 P06 | 30min | 1 tasks | 4 files |
 | Phase 08 P07 | 28min | 3 tasks | 3 files |
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 9 added: Acceptance Metrics & Evolution Algorithm Closure
