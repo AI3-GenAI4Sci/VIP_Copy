@@ -453,6 +453,45 @@ def test_run_one_request_skips_trial_when_portfolio_empty(monkeypatch, tmp_path)
     assert snapshot["exploration_decision"]["no_trial_reason"] == "no_eligible_delta"
 
 
+def test_run_one_request_rejects_delta_for_wrong_target_skill(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    live_skill_root, _target, original = _write_live_skill_root(
+        tmp_path, target="current/personalized-copy-generation/SKILL.md"
+    )
+    portfolio = [
+        _valid_delta_row(
+            delta_id="D-wrong-target",
+            target_skill="current/unrelated-skill/SKILL.md",
+            proposed_change=original + "\nWrong skill refinement\n",
+        ).model_copy(update={"applicable_surface": ["product_detail_card"]})
+    ]
+
+    record = runner._run_one_request(
+        request_id="req-wrong-target",
+        scenario={"request_id": "req-wrong-target"},
+        nodes=[
+            NodeSpec(
+                id="personalized_copy_generation",
+                skill_name="personalized-copy-generation",
+                output_model=object,  # type: ignore[arg-type]
+            )
+        ],
+        provider_factory=lambda: object(),
+        request_dir=tmp_path / "req-wrong-target",
+        events=[],
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+        journal_path=tmp_path / "portfolio_journal.jsonl",
+    )
+
+    assert record["exception"] is None
+    assert record["trial_selected_delta_id"] is None
+    assert not (tmp_path / "portfolio_journal.jsonl").exists()
+    snapshot = _read_snapshot(tmp_path / "req-wrong-target")
+    assert snapshot["exploration_decision"]["should_trial"] is False
+    assert snapshot["exploration_decision"]["no_trial_reason"] == "no_eligible_delta"
+
+
 def test_run_one_request_trial_failure_does_not_abort_host(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _TrialFailingRuntime)
     live_skill_root, target, original = _write_live_skill_root(tmp_path)
@@ -826,6 +865,57 @@ def test_fold_portfolio_journal_at_stage_boundary(monkeypatch, tmp_path):
     assert portfolio[0].sample_count == 1
     summary = json.loads(
         (tmp_path / "stage2" / "batch_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["behavioral_metrics"]["trial_belief_update_count"] == 1
+
+
+def test_fold_portfolio_journal_does_not_replay_prior_stage_rows(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
+    monkeypatch.setitem(runner._STAGE_CONFIG, 2, (1, 1))
+    monkeypatch.setitem(runner._STAGE_CONFIG, 3, (1, 1))
+    live_skill_root, target, original = _write_live_skill_root(tmp_path)
+    portfolio = [
+        _valid_delta_row(
+            delta_id="D-stage",
+            target_skill=target,
+            proposed_change=original + "\nTrial refinement\n",
+        )
+    ]
+
+    stage2 = runner._run_stage(
+        stage=2,
+        request_ids=["req-stage-2"],
+        scenario_loader=lambda rid: {"request_id": rid, "scenario_id": "scenario-1"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+    )
+    assert stage2.passed is True
+    assert portfolio[0].sample_count == 1
+
+    stage3 = runner._run_stage(
+        stage=3,
+        request_ids=["req-stage-3"],
+        scenario_loader=lambda rid: {"request_id": rid, "scenario_id": "scenario-1"},
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=portfolio,
+        live_skill_root=live_skill_root,
+    )
+
+    assert stage3.passed is True
+    entries = read_journal_entries(tmp_path / "portfolio_journal.jsonl")
+    assert len(entries) == 2
+    assert portfolio[0].sample_count == 2
+    summary = json.loads(
+        (tmp_path / "stage3" / "batch_summary.json").read_text(encoding="utf-8")
     )
     assert summary["behavioral_metrics"]["trial_belief_update_count"] == 1
 

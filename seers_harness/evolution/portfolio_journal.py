@@ -50,6 +50,13 @@ def fold_portfolio_journal(
     portfolio: list[DeltaPortfolioRow],
 ) -> list[DeltaPortfolioRow]:
     entries = read_journal_entries(journal_path)
+    return fold_portfolio_entries(entries, portfolio)
+
+
+def fold_portfolio_entries(
+    entries: list[PortfolioJournalEntry],
+    portfolio: list[DeltaPortfolioRow],
+) -> list[DeltaPortfolioRow]:
     if not entries:
         return portfolio
 

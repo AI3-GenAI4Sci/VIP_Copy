@@ -145,7 +145,7 @@ from seers_harness.evolution.delta_portfolio import (
 from seers_harness.evolution.portfolio_journal import (
     PortfolioJournalEntry,
     append_journal_entry,
-    fold_portfolio_journal,
+    fold_portfolio_entries,
     read_journal_entries,
 )
 from seers_harness.evolution.status_machine import apply_status_transitions
@@ -645,6 +645,14 @@ def _target_skill_matches_surface(target_skill: str, surfaces: Sequence[str]) ->
     return False
 
 
+def _target_skill_for_nodes(nodes: Sequence[Any]) -> str | None:
+    for node in nodes:
+        skill_name = getattr(node, "skill_name", None)
+        if isinstance(skill_name, str) and skill_name:
+            return f"current/{skill_name}/SKILL.md"
+    return None
+
+
 def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRuntime) -> None:
     total_tokens = sum(
         int((event.get("usage") or {}).get("total_tokens") or 0)
@@ -819,6 +827,7 @@ def _run_one_request(
         decision = select_trial_delta(
             portfolio=delta_portfolio,
             applicable_surface=applicable_surface,
+            target_skill=_target_skill_for_nodes(nodes),
             rng=_trial_rng,
         )
         events.append(_exploration_decision_event(decision))
@@ -1002,6 +1011,8 @@ def _run_stage(
     started_at = _utc_now_iso()
     records: list[dict[str, Any]] = []
     failure_exc: BaseException | None = None
+    journal_path = out_dir / "portfolio_journal.jsonl"
+    journal_entries_before = len(read_journal_entries(journal_path))
 
     print(f"[runner] stage {stage}: n={n} concurrency={stage_concurrency}", file=sys.stderr)
 
@@ -1176,15 +1187,15 @@ def _run_stage(
         n=n,
         concurrency=stage_concurrency,
     )
-    journal_path = out_dir / "portfolio_journal.jsonl"
     if journal_path.exists():
         entries = read_journal_entries(journal_path)
+        new_entries = entries[journal_entries_before:]
         token_costs_by_delta: dict[str, list[int]] = {}
-        for entry in entries:
+        for entry in new_entries:
             token_costs_by_delta.setdefault(entry.delta_id, []).append(
                 entry.token_cost_delta
             )
-        delta_portfolio[:] = fold_portfolio_journal(journal_path, delta_portfolio)
+        delta_portfolio[:] = fold_portfolio_entries(new_entries, delta_portfolio)
         delta_portfolio[:] = apply_status_transitions(
             delta_portfolio,
             token_cost_deltas_by_delta=token_costs_by_delta,
