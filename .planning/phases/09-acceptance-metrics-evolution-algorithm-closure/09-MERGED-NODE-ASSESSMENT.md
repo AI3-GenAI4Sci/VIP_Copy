@@ -120,3 +120,19 @@ The repair is evidence-driven by request `-6833651210813617137` for
 single-angle collapse, request `-6833675077757301063` for role/label pressure,
 and requests `-2223161019833131686`, `-6833651252302891142`, and
 `-6833721702418762089` for semantic weak linkage despite valid ids.
+
+## Repair Applied
+
+Applied in Plan 09-05 Task 3 as lightweight SKILL wording only:
+
+- Added merged-path state wording so factor state and copy state remain
+  separate work surfaces inside the shared session.
+- Added the plural distinct user-product tensions contract without any numeric
+  factor threshold.
+- Added red flags for single-angle collapse, duplicate factors,
+  copy-before-factor behavior, role/label-as-factor shortcuts, and valid-id
+  weak-line failures.
+- Strengthened the `source_factor_id` contract so ids must be backed by
+  product-grounded scene-result transduction.
+
+No tool implementation, DAG wiring, or production split-node behavior changed.
