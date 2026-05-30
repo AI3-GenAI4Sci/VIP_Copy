@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EVOLUTION_FILES = (
     ROOT / "seers_harness/evolution/delta_portfolio.py",
+    ROOT / "seers_harness/evolution/portfolio_journal.py",
     ROOT / "seers_harness/validation/runner.py",
     ROOT / "seers_harness/validation/evolution_snapshot.py",
 )
@@ -140,13 +141,14 @@ def test_mechanism_evidence_identifiers_are_present() -> None:
         "selected_delta_id": source,
         "trial_workspace": source,
         "append_journal_entry": source,
-        "fold_portfolio_journal": source,
         "belief_alpha": source,
         "belief_beta": source,
         "sample_count": source,
         "trial_belief_update_count": batch_source + judges_source,
     }
     missing = [name for name, haystack in required.items() if name not in haystack]
+    if "fold_portfolio_journal" not in source and "fold_portfolio_entries" not in source:
+        missing.append("fold_portfolio_journal_or_entries")
     assert missing == []
 
 
