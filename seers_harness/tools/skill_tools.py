@@ -1,428 +1,232 @@
-"""Skill tools — pure-function tool handlers for the c17 true-tool-use loop.
+"""Tool handlers for the split personalized-copy workflow.
 
-Every handler signature is universal: ``def fn(args: dict, state: dict) -> str``.
-Handlers return literal strings (``"recorded"``, ``"finalized"``, or the fixed
-reflect prompt) and raise ``ToolValidationError`` on any structural failure.
-No counts, no aggregated state, no judgments in return values — Principle 1
-(tools are hand / eye / mirror, not brain).
+ROLE CLASSIFICATION
+# maintain_user_factors_artifact hand
+# maintain_copy_artifact hand
+# judge_candidate hand
+# submit_judgments_final hand
+# reflect_on_user_factor_coverage mirror
+# reflect_on_copy_quality mirror
+(eye count: 0)
 """
-
-# ROLE CLASSIFICATION (TOOL-09 + ADR-01-PRINCIPLE-01..03)
-# record_factor             hand
-# submit_factors_final      hand
-# record_candidate          hand
-# submit_copies_final       hand
-# judge_candidate           hand
-# submit_judgments_final    hand
-# reflect_on_coverage       mirror
-# reflect_on_diversity      mirror
-# (eye count: 0 — additions require written justification)
 
 from __future__ import annotations
 
-import re
-from typing import Any, Callable
+import json
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
 from seers_harness.core.errors import ToolValidationError
 from seers_harness.domain.models import (
+    CopyCandidate,
     CopyGenerationArtifact,
-    FactorDiscoveryArtifact,
     PersonalizedCopyRubricArtifact,
     PersonalizedCopyRubricJudgment,
+    UserPersonalizationArtifact,
+    UserPersonalizationFactor,
 )
 
 
-# Pure-function helpers for evidence-path resolution, Chinese-digit detection,
-# and ad-copy character counting — used by record_factor / record_candidate /
-# judge_candidate below.
+ArtifactAction = Literal[
+    "read",
+    "upsert_many",
+    "delete_many",
+    "validate",
+    "save",
+]
 
 
-_ARABIC_DIGIT = re.compile(r"\d")
-# Chinese-digit-as-number patterns: digit immediately preceding a unit word
-# (折/元/件/瓶/盒/支/月/年/天/秒/小时/折扣/号 etc) or a digit followed by 块/钱.
-# Bare 一/二/三 in compounds like 一支/一族/一点/一道 are language tokens,
-# not numeric values, and must not trip this check.
-_CN_NUM_AS_VALUE = re.compile(
-    r"[一二三四五六七八九十零百千万]"
-    r"(?:折|元|件|瓶|盒|份|月|年|天|号|块|毛|分钟|小时|秒|百分|倍)"
-)
-_DIGIT_UNIT = re.compile(r"\d\s*(?:折|元|件|瓶|盒|份|月|年|天|号|%)")
+_REFLECT_USER_FACTOR_COVERAGE = """\
+请在本轮先回答这些问题，再决定是否更新 user factor artifact：
 
-_CN_TOKEN_RE = re.compile(r"[一-鿿]{2,}")
-_CAT3_BRAND_SEARCH_KEY_RE = re.compile(r"(cat3|brand|search)", re.IGNORECASE)
-_FACTOR_TEXT_FIELD_DESCRIPTION = (
-    "Free-text reasoning field. Avoid ASCII double quote characters inside "
-    "the value; use Chinese quote marks or paraphrase instead so strict "
-    "tool-call JSON remains valid."
-)
-
-
-def _resolve_path(payload: dict[str, Any], dotted_path: str) -> bool:
-    """Walk a ``a.b.c`` (or ``a[0].b``) path; return True iff terminal value
-    is not None."""
-    if not dotted_path:
-        return False
-    cur: Any = payload
-    parts = re.findall(r"[^.\[\]]+", dotted_path)
-    for part in parts:
-        if isinstance(cur, dict):
-            cur = cur.get(part)
-        elif isinstance(cur, list):
-            try:
-                cur = cur[int(part)]
-            except (ValueError, IndexError):
-                return False
-        else:
-            return False
-        if cur is None:
-            return False
-    return cur is not None
-
-
-def _visible_chinese_chars(s: str) -> int:
-    """Approximate visible character count for ad copy — strip ASCII spaces
-    and punctuation; count remaining unicode code points."""
-    cleaned = re.sub(r"[\s　，。、；：！？“”‘’（）【】「」《》—…·.,;:!?\"'(){}<>\-]", "", s)
-    return len(cleaned)
-
-
-# --------------------------------------------------------------------------- #
-# Reflect constants (ADR-Q-RESOLUTIONS Q2 — Python, not SKILL.md)             #
-# --------------------------------------------------------------------------- #
-
-
-_REFLECT_COVERAGE = """\
-Answer each question IN THIS turn, in writing, before deciding whether to call submit_factors_final:
-
-1. Re-read user_state.behavior in the payload. Name every distinct behavior-signal field.
-   For each: did you mine a factor from it, or write one sentence explaining why you intentionally skipped it?
-
-2. Look at the factors you have recorded. Do they collapse onto one user-side signal class
-   (all click history / all profile / all derived)? If yes, what other class of latent
-   user-product relation could surface a factor you have not yet recorded?
-
-3. Pick any recorded factor. Imagine a different user who shares the underlying disposition
-   but NOT the literal behavior tokens of this user. Could the factor still honestly describe
-   that user? If not, the factor is overfit — re-record it.
+1. 用户因子是否覆盖了主要显性需求、潜在诉求、场景痛点和决策顾虑？
+2. 是否有因子只是画像标签或行为字段改名，而没有形成可复用购买动机？
+3. 是否有多个因子会导向同一个表达 hook，需要合并？
 """
 
 
-_REFLECT_DIVERSITY = """\
-Answer each question IN THIS turn before submit_copies_final:
+_REFLECT_COPY_QUALITY = """\
+请在本轮先回答这些问题，再决定是否更新 copy artifact：
 
-1. Read the first 3 characters of every candidate text you have recorded.
-   List the heads. Are 3 or more starting with the same product anchor?
-   If yes, your structural variety is fake — re-record those candidates with different anchor heads.
-
-2. Imagine a retrieved user who does NOT share the literal behavior tokens of the current user.
-   For each candidate, would the line still feel honest to that user, or does it pretend to
-   know something specific about them? Re-record any candidate that fails this test.
-
-3. Read each candidate as a 22-year-old, a 35-year-old, and a 55-year-old.
-   Does it land for at least two of the three? If only one, the line is over-fit to one age
-   band — broaden or drop.
+1. 每条文案是否绑定了一个明确的 user factor 和商品承接点？
+2. 文案是否通过痛点、场景、体验结果或价值感表达商品，而不是重复商品名？
+3. 是否存在动态数字、私有轨迹或商品事实承接不足的表达？
 """
 
 
-# --------------------------------------------------------------------------- #
-# record_factor (hand) — TOOL-01                                              #
-# --------------------------------------------------------------------------- #
-
-
-class _RecordFactorArgs(BaseModel):
-    factor_id: str
-    user_side_signal: str
-    direction: str  # JSON-Schema enum constraint applied at the spec layer
-    evidence_paths: list[str]
-    bridge_to_product: str
-    transferable_disposition: str  # DATA-01 — required
-    covers_product_ids: list[str]
+class _MaintainUserFactorsArtifactArgs(BaseModel):
+    action: ArtifactAction
+    user_factors: list[UserPersonalizationFactor] = Field(default_factory=list)
+    user_factor_ids: list[str] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
 
-def _ensure_evidence_paths_resolve(paths: list[str], payload: dict) -> None:
-    if not paths:
-        raise ToolValidationError(
-            message="record_factor requires at least one evidence_paths entry",
-            tool_name="record_factor",
-            arg_path="evidence_paths",
-        )
-    for p in paths:
-        if not _resolve_path(payload, p):
-            raise ToolValidationError(
-                message=f"evidence_paths entry does not resolve against payload: {p!r}",
-                tool_name="record_factor",
-                arg_path="evidence_paths",
-            )
-
-
-def record_factor(args: dict, state: dict) -> str:
-    """Hand. Append one personalization factor to state['factors']."""
-    try:
-        parsed = _RecordFactorArgs.model_validate(args)
-    except ValidationError as exc:
-        raise ToolValidationError(
-            message=f"record_factor args invalid: {exc.errors()[:3]}",
-            tool_name="record_factor",
-        ) from exc
-    _ensure_evidence_paths_resolve(parsed.evidence_paths, state.get("payload", {}))
-    state.setdefault("factors", []).append(parsed.model_dump())
-    return "recorded"
-
-
-# --------------------------------------------------------------------------- #
-# submit_factors_final (hand) — TOOL-02                                       #
-# --------------------------------------------------------------------------- #
-
-
-def submit_factors_final(args: dict, state: dict) -> str:
-    """Hand. Validate the FactorDiscoveryArtifact and hand it off."""
-    try:
-        artifact = FactorDiscoveryArtifact.model_validate(args)
-    except ValidationError as exc:
-        raise ToolValidationError(
-            message=f"FactorDiscoveryArtifact schema invalid: {exc.errors()[:3]}",
-            tool_name="submit_factors_final",
-        ) from exc
-    state["final_artifact"] = artifact.model_dump()
-    return "finalized"
-
-
-# --------------------------------------------------------------------------- #
-# record_candidate (hand) — TOOL-03                                           #
-# Validation order (contractual; tested in test_skill_tools_record_candidate):#
-#   (1) drafts integrity   — index in range AND text == drafts[index]        #
-#   (2) Arabic-digit       — _ARABIC_DIGIT.search(text) must be None         #
-#   (3) CN-num-as-value    — _CN_NUM_AS_VALUE.search(text) must be None      #
-#   (4) length             — 10 <= _visible_chinese_chars(text) <= 16         #
-#   (5) anchor literal     — product_anchor + relation_anchor both in text    #
-#   (6) user-history leak  — dynamic projection from payload.user_state       #
-# --------------------------------------------------------------------------- #
-
-
-class _RecordCandidateArgs(BaseModel):
-    candidate_id: str
-    target_product_id: str
-    source_factor_id: str
-    text: str
-    considered_drafts: list[str]
-    chosen_draft_index: int
-    bridge_logic: dict
-    used_copyable_hooks: list[str] = Field(default_factory=list)
-    intended_effect: str = ""
+class _MaintainCopyArtifactArgs(BaseModel):
+    action: ArtifactAction
+    candidates: list[CopyCandidate] = Field(default_factory=list)
+    candidate_ids: list[str] = Field(default_factory=list)
+    product_id: str = ""
     model_config = {"extra": "forbid"}
 
 
-def _project_user_history_tokens(payload: dict) -> set[str]:
-    behavior = (payload.get("user_state") or {}).get("behavior") or {}
-    tokens: set[str] = set()
-    for key, val in behavior.items():
-        if not isinstance(key, str) or not _CAT3_BRAND_SEARCH_KEY_RE.search(key):
-            continue
-        text_v = val if isinstance(val, str) else ",".join(str(x) for x in (val or []))
-        tokens.update(_CN_TOKEN_RE.findall(text_v))
-    return tokens
+def _json(data: dict[str, Any]) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
-def _project_target_product_tokens(payload: dict, product_id: str) -> set[str]:
-    allowed: set[str] = set()
-    for prod in payload.get("products") or []:
-        if str(prod.get("product_id")) != str(product_id):
-            continue
-        attrs = prod.get("attributes") or {}
-        for k in (
-            "item_cat3_name", "cat3_name", "cat3",
-            "item_cat2_name", "cat2_name",
-            "item_cat1_name", "cat1_name",
-            "item_brand_name", "brand_name", "brand",
-            "item_name", "title",
-        ):
-            v = attrs.get(k)
-            if not v:
-                continue
-            v = str(v)
-            allowed.add(v)
-            for piece in re.split(r"[\s/／、,，()（）]+", v):
-                piece = piece.strip()
-                if 2 <= len(piece) <= 8:
-                    allowed.add(piece)
-        gk = prod.get("group_key")
-        if gk:
-            allowed.add(str(gk))
-    return allowed
+def _dump_user_factors(
+    user_factors: list[UserPersonalizationFactor],
+) -> list[dict[str, Any]]:
+    return [factor.model_dump() for factor in user_factors]
 
 
-def _reject_user_history_leak(text: str, payload: dict, product_id: str) -> None:
-    user_tokens = _project_user_history_tokens(payload)
-    product_tokens = _project_target_product_tokens(payload, product_id)
-    leaks = user_tokens - product_tokens
-    if not leaks:
-        return
-    hits = [t for t in leaks if t in text]
-    if hits:
-        raise ToolValidationError(
-            message=f"candidate text contains user-history tokens not present in target product: {hits[:3]}",
-            tool_name="record_candidate",
-            arg_path="text",
-        )
+def _dump_candidates(candidates: list[CopyCandidate]) -> list[dict[str, Any]]:
+    return [candidate.model_dump() for candidate in candidates]
 
 
-def record_candidate(args: dict, state: dict) -> str:
-    """Hand. Append one CopyCandidate after the 6-step validation order."""
+def _validate_user_factor_state(state: dict) -> list[dict[str, Any]]:
     try:
-        parsed = _RecordCandidateArgs.model_validate(args)
+        artifact = UserPersonalizationArtifact.model_validate(
+            {"user_factors": state.get("user_factors", [])}
+        )
     except ValidationError as exc:
         raise ToolValidationError(
-            message=f"record_candidate args invalid: {exc.errors()[:3]}",
-            tool_name="record_candidate",
+            message=f"user factor artifact state invalid: {exc.errors()[:3]}",
+            tool_name="maintain_user_factors_artifact",
         ) from exc
-    text = parsed.text
-
-    # (1) drafts integrity
-    if parsed.chosen_draft_index < 0 or parsed.chosen_draft_index >= len(parsed.considered_drafts):
-        raise ToolValidationError(
-            message=f"chosen_draft_index {parsed.chosen_draft_index} out of range for {len(parsed.considered_drafts)} drafts",
-            tool_name="record_candidate",
-            arg_path="chosen_draft_index",
-        )
-    if text != parsed.considered_drafts[parsed.chosen_draft_index]:
-        raise ToolValidationError(
-            message="text must equal considered_drafts[chosen_draft_index]",
-            tool_name="record_candidate",
-            arg_path="text",
-        )
-
-    # (2) Arabic digit
-    if _ARABIC_DIGIT.search(text):
-        raise ToolValidationError(
-            message=f"text contains Arabic digit: {text!r}",
-            tool_name="record_candidate",
-            arg_path="text",
-        )
-
-    # (3) CN num-as-value
-    if _CN_NUM_AS_VALUE.search(text):
-        raise ToolValidationError(
-            message=f"text contains Chinese numeral-as-value: {text!r}",
-            tool_name="record_candidate",
-            arg_path="text",
-        )
-
-    # (4) length
-    n = _visible_chinese_chars(text)
-    if not (10 <= n <= 16):
-        raise ToolValidationError(
-            message=f"visible Chinese char count {n} not in [10, 16]: {text!r}",
-            tool_name="record_candidate",
-            arg_path="text",
-        )
-
-    # (5) anchor literal
-    bl = parsed.bridge_logic or {}
-    product_anchor = str(bl.get("product_anchor") or "")
-    relation_anchor = str(bl.get("relation_anchor") or "")
-    if not product_anchor or product_anchor not in text:
-        raise ToolValidationError(
-            message=f"bridge_logic.product_anchor must be a literal substring of text; anchor={product_anchor!r} text={text!r}",
-            tool_name="record_candidate",
-            arg_path="bridge_logic.product_anchor",
-        )
-    if not relation_anchor or relation_anchor not in text:
-        raise ToolValidationError(
-            message=f"bridge_logic.relation_anchor must be a literal substring of text; anchor={relation_anchor!r} text={text!r}",
-            tool_name="record_candidate",
-            arg_path="bridge_logic.relation_anchor",
-        )
-
-    # (6) user-history leak
-    _reject_user_history_leak(text, state.get("payload", {}), parsed.target_product_id)
-
-    state.setdefault("candidates", []).append(parsed.model_dump())
-    return "recorded"
+    return artifact.model_dump()["user_factors"]
 
 
-# --------------------------------------------------------------------------- #
-# submit_copies_final (hand) — TOOL-04                                        #
-# --------------------------------------------------------------------------- #
-
-
-def submit_copies_final(args: dict, state: dict) -> str:
-    """Hand. Validate the CopyGenerationArtifact and hand it off.
-
-    Sets BOTH state['final_artifact'] (loop termination signal) AND
-    state['copies_artifact'] (read by the rubric SKILL's judge_candidate
-    in the next loop iteration). Phase 3 wires these into a fresh state
-    dict per skill invocation.
-    """
+def _validate_copy_state(state: dict) -> list[dict[str, Any]]:
     try:
-        artifact = CopyGenerationArtifact.model_validate(args)
+        artifact = CopyGenerationArtifact.model_validate(
+            {"candidates": state.get("candidates", [])}
+        )
     except ValidationError as exc:
         raise ToolValidationError(
-            message=f"CopyGenerationArtifact schema invalid: {exc.errors()[:3]}",
-            tool_name="submit_copies_final",
+            message=f"copy artifact state invalid: {exc.errors()[:3]}",
+            tool_name="maintain_copy_artifact",
         ) from exc
-    dumped = artifact.model_dump()
-    state["final_artifact"] = dumped
-    state["copies_artifact"] = dumped
-    return "finalized"
+    return artifact.model_dump()["candidates"]
 
 
-# --------------------------------------------------------------------------- #
-# judge_candidate (hand) — TOOL-05                                            #
-# --------------------------------------------------------------------------- #
+def maintain_user_factors_artifact(args: dict, state: dict) -> str:
+    """Maintain user-side personalization factor artifact state."""
+    try:
+        parsed = _MaintainUserFactorsArtifactArgs.model_validate(args)
+    except ValidationError as exc:
+        raise ToolValidationError(
+            message=f"maintain_user_factors_artifact args invalid: {exc.errors()[:3]}",
+            tool_name="maintain_user_factors_artifact",
+        ) from exc
+
+    if parsed.action == "read":
+        return _json({"user_factors": _validate_user_factor_state(state)})
+    if parsed.action == "validate":
+        _validate_user_factor_state(state)
+        return "valid"
+    if parsed.action == "save":
+        user_factors = _validate_user_factor_state(state)
+        state["final_artifact"] = {"user_factors": user_factors}
+        return "saved"
+
+    user_factors = _validate_user_factor_state(state)
+    if parsed.action == "upsert_many":
+        by_id = {factor["user_factor_id"]: factor for factor in user_factors}
+        for factor in _dump_user_factors(parsed.user_factors):
+            by_id[factor["user_factor_id"]] = factor
+        state["user_factors"] = list(by_id.values())
+        return "updated"
+    if parsed.action == "delete_many":
+        remove = set(parsed.user_factor_ids)
+        state["user_factors"] = [
+            f for f in user_factors if f["user_factor_id"] not in remove
+        ]
+        return "updated"
+    raise AssertionError(f"unhandled action: {parsed.action}")
+
+
+def maintain_copy_artifact(args: dict, state: dict) -> str:
+    """Maintain copy candidate artifact state."""
+    try:
+        parsed = _MaintainCopyArtifactArgs.model_validate(args)
+    except ValidationError as exc:
+        raise ToolValidationError(
+            message=f"maintain_copy_artifact args invalid: {exc.errors()[:3]}",
+            tool_name="maintain_copy_artifact",
+        ) from exc
+
+    if parsed.action == "read":
+        return _json({"candidates": _validate_copy_state(state)})
+    if parsed.action == "validate":
+        _validate_copy_state(state)
+        return "valid"
+    if parsed.action == "save":
+        candidates = _validate_copy_state(state)
+        dumped = {"candidates": candidates}
+        state["final_artifact"] = dumped
+        state["copies_artifact"] = dumped
+        return "saved"
+
+    candidates = _validate_copy_state(state)
+    if parsed.action == "upsert_many":
+        by_id = {candidate["candidate_id"]: candidate for candidate in candidates}
+        for candidate in _dump_candidates(parsed.candidates):
+            by_id[candidate["candidate_id"]] = candidate
+        state["candidates"] = list(by_id.values())
+        return "updated"
+    if parsed.action == "delete_many":
+        remove = set(parsed.candidate_ids)
+        state["candidates"] = [
+            c for c in candidates if c["candidate_id"] not in remove
+        ]
+        return "updated"
+    raise AssertionError(f"unhandled action: {parsed.action}")
+
+
+def reflect_on_user_factor_coverage(args: dict, state: dict) -> str:
+    """Return user-factor coverage reflection questions."""
+    return _REFLECT_USER_FACTOR_COVERAGE
+
+
+def reflect_on_copy_quality(args: dict, state: dict) -> str:
+    """Return copy quality reflection questions."""
+    return _REFLECT_COPY_QUALITY
 
 
 def judge_candidate(args: dict, state: dict) -> str:
-    """Hand. Validate one rubric judgment against its candidate.
-
-    Reads candidate text from state['copies_artifact']['candidates'] (set
-    by submit_copies_final in the prior loop iteration; see TOOL-04).
-    For every per_axis verdict with a non-empty verbatim_candidate_quote,
-    asserts the quote is a literal substring of the candidate text.
-    """
+    """Validate and append one scored rubric judgment."""
     try:
         judgment = PersonalizedCopyRubricJudgment.model_validate(args)
     except ValidationError as exc:
+        first_error = exc.errors()[0] if exc.errors() else {}
+        arg_path = "total_score" if first_error.get("type") == "value_error" else ""
         raise ToolValidationError(
             message=f"judgment schema invalid: {exc.errors()[:3]}",
             tool_name="judge_candidate",
+            arg_path=arg_path,
         ) from exc
     candidates = (state.get("copies_artifact") or {}).get("candidates") or []
     text_by_id = {c.get("candidate_id"): c.get("text", "") for c in candidates}
     cand_text = text_by_id.get(judgment.candidate_id, "")
     if judgment.candidate_id not in text_by_id:
-        # Surface the missing candidate explicitly only when at least one quote
-        # would otherwise be checked against an empty string.
-        for axis in judgment.per_axis:
-            if axis.verbatim_candidate_quote:
-                raise ToolValidationError(
-                    message=f"candidate_id {judgment.candidate_id!r} not present in state['copies_artifact']['candidates']",
-                    tool_name="judge_candidate",
-                    arg_path="candidate_id",
-                )
-    for axis in judgment.per_axis:
-        quote = axis.verbatim_candidate_quote
-        if not quote:
-            continue
-        if quote not in cand_text:
-            raise ToolValidationError(
-                message=f"verbatim_candidate_quote for axis {axis.axis_id!r} not literally in candidate text (candidate_id={judgment.candidate_id!r}, quote={quote!r})",
-                tool_name="judge_candidate",
-                arg_path=f"per_axis[{axis.axis_id}].verbatim_candidate_quote",
-            )
+        raise ToolValidationError(
+            message=f"candidate_id {judgment.candidate_id!r} not present in state['copies_artifact']['candidates']",
+            tool_name="judge_candidate",
+            arg_path="candidate_id",
+        )
+    if judgment.copy_text and judgment.copy_text != cand_text:
+        raise ToolValidationError(
+            message="copy_text must exactly match the candidate text for candidate_id",
+            tool_name="judge_candidate",
+            arg_path="copy_text",
+        )
     state.setdefault("judgments", []).append(judgment.model_dump())
     return "recorded"
 
 
-# --------------------------------------------------------------------------- #
-# submit_judgments_final (hand) — TOOL-06                                     #
-# --------------------------------------------------------------------------- #
-
-
 def submit_judgments_final(args: dict, state: dict) -> str:
-    """Hand. Validate the PersonalizedCopyRubricArtifact and hand it off."""
+    """Validate and finalize the rubric artifact."""
     try:
         artifact = PersonalizedCopyRubricArtifact.model_validate(args)
     except ValidationError as exc:
@@ -434,208 +238,99 @@ def submit_judgments_final(args: dict, state: dict) -> str:
     return "finalized"
 
 
-# --------------------------------------------------------------------------- #
-# reflect_on_coverage (mirror) — TOOL-07                                      #
-# reflect_on_diversity (mirror) — TOOL-08                                     #
-# --------------------------------------------------------------------------- #
+_ARTIFACT_ACTION_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": [
+        "read",
+        "upsert_many",
+        "delete_many",
+        "validate",
+        "save",
+    ],
+}
 
-
-def reflect_on_coverage(args: dict, state: dict) -> str:
-    """Mirror. Surface the fixed three-question coverage prompt."""
-    return _REFLECT_COVERAGE
-
-
-def reflect_on_diversity(args: dict, state: dict) -> str:
-    """Mirror. Surface the fixed three-question diversity prompt
-    (includes the 22-year-old age-swap canary)."""
-    return _REFLECT_DIVERSITY
-
-
-# --------------------------------------------------------------------------- #
-# Tool specs (hand-authored; DeepSeek /beta strict mode)                      #
-# Probe-verified shape: 2026-05-25 research/probe_q1_q2.py                    #
-# Every property in `required` (strict-mode contract). Critique-style         #
-# properties precede verdict-style (RESEARCH §Open Q2 RESOLVED).              #
-# --------------------------------------------------------------------------- #
-
-
-RECORD_FACTOR_SPEC: dict = {
-    "type": "function",
-    "function": {
-        "name": "record_factor",
-        "description": (
-            "Append one personalization factor to the working set. "
-            "Call multiple times. Each call records one factor."
-        ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": [
-                "factor_id", "user_side_signal", "direction",
-                "evidence_paths", "bridge_to_product",
-                "transferable_disposition", "covers_product_ids",
-            ],
-            "properties": {
-                "factor_id": {"type": "string"},
-                "user_side_signal": {
-                    "type": "string",
-                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                },
-                "direction": {
-                    "type": "string",
-                    "enum": ["user_to_need", "item_to_need", "cross"],
-                },
-                "evidence_paths": {"type": "array", "items": {"type": "string"}},
-                "bridge_to_product": {
-                    "type": "string",
-                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                },
-                "transferable_disposition": {
-                    "type": "string",
-                    "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                },
-                "covers_product_ids": {"type": "array", "items": {"type": "string"}},
-            },
-        },
+_EVIDENCE_REF_ITEM: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["path", "value"],
+    "properties": {
+        "path": {"type": "string"},
+        "value": {"type": ["string", "number", "boolean", "null"]},
     },
 }
 
+_USER_FACTOR_ITEM_REQUIRED = [
+    "user_factor_id",
+    "signal_basis",
+    "need_or_pain",
+    "scene_trigger",
+    "buying_heuristic",
+    "expression_hooks",
+    "evidence_refs",
+]
+_USER_FACTOR_ITEM_PROPERTIES: dict[str, Any] = {
+    "user_factor_id": {"type": "string"},
+    "signal_basis": {"type": "string"},
+    "need_or_pain": {"type": "string"},
+    "scene_trigger": {"type": "string"},
+    "buying_heuristic": {"type": "string"},
+    "expression_hooks": {"type": "array", "items": {"type": "string"}},
+    "evidence_refs": {"type": "array", "items": dict(_EVIDENCE_REF_ITEM)},
+}
 
-REFLECT_ON_COVERAGE_SPEC: dict = {
-    "type": "function",
-    "function": {
-        "name": "reflect_on_coverage",
-        "description": (
-            "When unsure whether transferable angles are exhausted, call this "
-            "to receive three coverage questions. Answer each in writing in your next turn."
-        ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": [],
-            "properties": {},
-        },
-    },
+_CANDIDATE_ITEM_REQUIRED = [
+    "candidate_id",
+    "product_id",
+    "source_user_factor_id",
+    "text",
+    "commercial_angle",
+    "product_binding",
+    "fact_binding",
+]
+_CANDIDATE_ITEM_PROPERTIES: dict[str, Any] = {
+    "candidate_id": {"type": "string"},
+    "product_id": {"type": "string"},
+    "source_user_factor_id": {"type": "string"},
+    "text": {"type": "string"},
+    "commercial_angle": {"type": "string"},
+    "product_binding": {"type": "string"},
+    "fact_binding": {"type": "string"},
 }
 
 
-SUBMIT_FACTORS_FINAL_SPEC: dict = {
+MAINTAIN_USER_FACTORS_ARTIFACT_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "submit_factors_final",
-        "description": "Submit the final FactorDiscoveryArtifact. Run terminates after this call.",
+        "name": "maintain_user_factors_artifact",
+        "description": "Maintain user personalization factor artifact state.",
         "strict": True,
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["factors"],
+            "required": ["action", "user_factors", "user_factor_ids"],
             "properties": {
-                "factors": {
+                "action": dict(_ARTIFACT_ACTION_SCHEMA),
+                "user_factors": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": [
-                            "factor_id", "user_side_signal", "direction",
-                            "evidence_refs", "bridge",
-                            "transferable_disposition", "covers_product_ids",
-                        ],
-                        "properties": {
-                            "factor_id": {"type": "string"},
-                            "user_side_signal": {
-                                "type": "string",
-                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                            },
-                            "direction": {
-                                "type": "string",
-                                "enum": ["user_to_need", "item_to_need", "cross"],
-                            },
-                            "evidence_refs": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "required": ["path", "value"],
-                                    "properties": {
-                                        "path": {"type": "string"},
-                                        "value": {"type": ["string", "number", "boolean", "null"]},
-                                    },
-                                },
-                            },
-                            "bridge": {
-                                "type": "string",
-                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                            },
-                            "transferable_disposition": {
-                                "type": "string",
-                                "description": _FACTOR_TEXT_FIELD_DESCRIPTION,
-                            },
-                            "covers_product_ids": {"type": "array", "items": {"type": "string"}},
-                        },
+                        "required": list(_USER_FACTOR_ITEM_REQUIRED),
+                        "properties": dict(_USER_FACTOR_ITEM_PROPERTIES),
                     },
                 },
+                "user_factor_ids": {"type": "array", "items": {"type": "string"}},
             },
         },
     },
 }
 
 
-_CANDIDATE_ITEM_REQUIRED = [
-    "candidate_id", "target_product_id", "source_factor_id",
-    "text", "considered_drafts", "chosen_draft_index",
-    "bridge_logic", "used_copyable_hooks", "intended_effect",
-]
-_CANDIDATE_ITEM_PROPERTIES: dict = {
-    "candidate_id": {"type": "string"},
-    "target_product_id": {"type": "string"},
-    "source_factor_id": {"type": "string"},
-    "text": {"type": "string"},
-    "considered_drafts": {"type": "array", "items": {"type": "string"}},
-    "chosen_draft_index": {"type": "integer"},
-    "bridge_logic": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["product_anchor", "relation_anchor"],
-        "properties": {
-            "product_anchor": {"type": "string"},
-            "relation_anchor": {"type": "string"},
-        },
-    },
-    "used_copyable_hooks": {"type": "array", "items": {"type": "string"}},
-    "intended_effect": {"type": "string"},
-}
-
-
-RECORD_CANDIDATE_SPEC: dict = {
+REFLECT_ON_USER_FACTOR_COVERAGE_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "record_candidate",
-        "description": (
-            "Append one copy candidate to the working set. Validates 6-step "
-            "order: drafts integrity, no Arabic digit, no CN numeral-as-value, "
-            "length 10..16, anchors literal in text, no user-history token leak."
-        ),
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": list(_CANDIDATE_ITEM_REQUIRED),
-            "properties": dict(_CANDIDATE_ITEM_PROPERTIES),
-        },
-    },
-}
-
-
-REFLECT_ON_DIVERSITY_SPEC: dict = {
-    "type": "function",
-    "function": {
-        "name": "reflect_on_diversity",
-        "description": (
-            "When unsure whether candidates are diverse enough, call this for "
-            "three diversity questions (includes the 22-year-old age-swap canary)."
-        ),
+        "name": "reflect_on_user_factor_coverage",
+        "description": "Return user-factor coverage reflection questions.",
         "strict": True,
         "parameters": {
             "type": "object",
@@ -647,17 +342,18 @@ REFLECT_ON_DIVERSITY_SPEC: dict = {
 }
 
 
-SUBMIT_COPIES_FINAL_SPEC: dict = {
+MAINTAIN_COPY_ARTIFACT_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "submit_copies_final",
-        "description": "Submit the final CopyGenerationArtifact.",
+        "name": "maintain_copy_artifact",
+        "description": "Maintain copy candidate artifact state.",
         "strict": True,
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["candidates"],
+            "required": ["action", "candidates", "candidate_ids", "product_id"],
             "properties": {
+                "action": dict(_ARTIFACT_ACTION_SCHEMA),
                 "candidates": {
                     "type": "array",
                     "items": {
@@ -667,65 +363,91 @@ SUBMIT_COPIES_FINAL_SPEC: dict = {
                         "properties": dict(_CANDIDATE_ITEM_PROPERTIES),
                     },
                 },
+                "candidate_ids": {"type": "array", "items": {"type": "string"}},
+                "product_id": {"type": "string"},
             },
         },
     },
 }
 
 
-_PER_AXIS_REQUIRED = [
-    "axis_id", "verbatim_candidate_quote",
-    "bridge_to_anchor", "templated_flag", "verdict",
-]
-_PER_AXIS_PROPERTIES: dict = {
-    # Critique BEFORE verdict — ADR-03 §C2, RESEARCH §Open Q2 RESOLVED.
-    "axis_id": {"type": "string"},
-    "verbatim_candidate_quote": {"type": "string"},
-    "bridge_to_anchor": {"type": "string"},
-    "templated_flag": {
-        "type": "string",
-        "enum": ["ok", "empty", "anchor_echo", "source_path_missing", "quote_too_short"],
+REFLECT_ON_COPY_QUALITY_SPEC: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "reflect_on_copy_quality",
+        "description": "Return copy quality reflection questions.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {},
+        },
     },
-    "verdict": {"type": "string", "enum": ["pass", "fail"]},
+}
+
+
+_AXIS_SCORE_REQUIRED = [
+    "axis_id",
+    "score",
+    "diagnostic",
+]
+_AXIS_SCORE_PROPERTIES: dict[str, Any] = {
+    "axis_id": {
+        "type": "string",
+        "enum": [
+            "user_factor_grounding",
+            "product_binding",
+            "personalized_conversion",
+            "commercial_sharpness",
+            "expression_boundary",
+        ],
+    },
+    "score": {"type": "integer", "minimum": 0, "maximum": 5},
+    "diagnostic": {"type": "string"},
 }
 
 _JUDGMENT_REQUIRED = [
-    "candidate_id", "candidate_index", "product_id", "copy_text",
-    "factor_id", "per_axis", "floor_violations",
-    "primary_strength", "primary_risk", "rationale", "decision",
+    "candidate_id",
+    "candidate_index",
+    "product_id",
+    "copy_text",
+    "user_factor_id",
+    "axis_scores",
+    "total_score",
+    "main_strength",
+    "main_weakness",
+    "failure_tags",
+    "decision",
 ]
-_JUDGMENT_PROPERTIES: dict = {
+_JUDGMENT_PROPERTIES: dict[str, Any] = {
     "candidate_id": {"type": "string"},
     "candidate_index": {"type": "integer"},
     "product_id": {"type": "string"},
     "copy_text": {"type": "string"},
-    "factor_id": {"type": "string"},
-    "per_axis": {
+    "user_factor_id": {"type": "string"},
+    "axis_scores": {
         "type": "array",
         "items": {
             "type": "object",
             "additionalProperties": False,
-            "required": list(_PER_AXIS_REQUIRED),
-            "properties": dict(_PER_AXIS_PROPERTIES),
+            "required": list(_AXIS_SCORE_REQUIRED),
+            "properties": dict(_AXIS_SCORE_PROPERTIES),
         },
     },
-    "floor_violations": {"type": "array", "items": {"type": "string"}},
-    "primary_strength": {"type": "string"},
-    "primary_risk": {"type": "string"},
-    "rationale": {"type": "string"},
+    "total_score": {"type": "integer", "minimum": 0, "maximum": 25},
+    "main_strength": {"type": "string"},
+    "main_weakness": {"type": "string"},
+    "failure_tags": {"type": "array", "items": {"type": "string"}},
     "decision": {"type": "string", "enum": ["admit", "hold", "reject"]},
 }
 
 
-JUDGE_CANDIDATE_SPEC: dict = {
+JUDGE_CANDIDATE_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "judge_candidate",
-        "description": (
-            "Append one rubric judgment for one candidate. Per-axis verdicts "
-            "MUST list critique fields BEFORE verdict (the args you emit are "
-            "your reasoning record)."
-        ),
+        "description": "Append one rubric judgment for one candidate.",
         "strict": True,
         "parameters": {
             "type": "object",
@@ -737,7 +459,7 @@ JUDGE_CANDIDATE_SPEC: dict = {
 }
 
 
-SUBMIT_JUDGMENTS_FINAL_SPEC: dict = {
+SUBMIT_JUDGMENTS_FINAL_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "submit_judgments_final",
@@ -763,31 +485,27 @@ SUBMIT_JUDGMENTS_FINAL_SPEC: dict = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Registries (TOOL-10)                                                        #
-# --------------------------------------------------------------------------- #
-
-
-TOOLS_SPEC: dict[str, list[dict]] = {
-    "discover-personalization-factors": [
-        RECORD_FACTOR_SPEC, REFLECT_ON_COVERAGE_SPEC, SUBMIT_FACTORS_FINAL_SPEC,
+TOOLS_SPEC: dict[str, list[dict[str, Any]]] = {
+    "personalized-user-mining": [
+        MAINTAIN_USER_FACTORS_ARTIFACT_SPEC,
+        REFLECT_ON_USER_FACTOR_COVERAGE_SPEC,
     ],
-    "generate-copy-candidates": [
-        RECORD_CANDIDATE_SPEC, REFLECT_ON_DIVERSITY_SPEC, SUBMIT_COPIES_FINAL_SPEC,
+    "personalized-copy-generation": [
+        MAINTAIN_COPY_ARTIFACT_SPEC,
+        REFLECT_ON_COPY_QUALITY_SPEC,
     ],
     "personalized-copy-rubric-judge": [
-        JUDGE_CANDIDATE_SPEC, SUBMIT_JUDGMENTS_FINAL_SPEC,
+        JUDGE_CANDIDATE_SPEC,
+        SUBMIT_JUDGMENTS_FINAL_SPEC,
     ],
 }
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict, dict], str]] = {
-    "record_factor": record_factor,
-    "submit_factors_final": submit_factors_final,
-    "record_candidate": record_candidate,
-    "submit_copies_final": submit_copies_final,
+    "maintain_user_factors_artifact": maintain_user_factors_artifact,
+    "maintain_copy_artifact": maintain_copy_artifact,
     "judge_candidate": judge_candidate,
     "submit_judgments_final": submit_judgments_final,
-    "reflect_on_coverage": reflect_on_coverage,
-    "reflect_on_diversity": reflect_on_diversity,
+    "reflect_on_user_factor_coverage": reflect_on_user_factor_coverage,
+    "reflect_on_copy_quality": reflect_on_copy_quality,
 }

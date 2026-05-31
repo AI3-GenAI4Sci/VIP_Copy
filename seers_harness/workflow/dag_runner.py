@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from seers_harness.agentic.tool_loop import ToolLoopError, run_skill_via_tools
 from seers_harness.core.errors import (
+    BusinessOutputError,
     SchemaValidationHarnessError,
     classify_exception,
 )
@@ -108,6 +109,8 @@ class WorkflowRuntime:
                     parsed = node.output_model.model_validate(result.artifact)
                 except ValidationError as exc:
                     raise SchemaValidationHarnessError(str(exc)) from exc
+                _assert_business_output(node_id=node.id, scenario=base_payload.get("scenario") or base_payload, artifact=parsed)
+                _attach_final_artifact(self.provider, node.id, parsed)
                 output_path = self._write_artifact(node, session_id, parsed)
                 self.records.append(
                     {"node_id": node.id, "attempt": attempt, "session_id": session_id,
@@ -166,3 +169,29 @@ class WorkflowRuntime:
             )
             output_paths[node.id] = output_path
         return output_paths
+
+
+def _attach_final_artifact(provider: Any, node_id: str, parsed: BaseModel) -> None:
+    """Attach the validated node artifact to the latest captured provider turn."""
+    request_log = getattr(provider, "request_log", None)
+    if not isinstance(request_log, list):
+        return
+    artifact = parsed.model_dump(mode="json")
+    for record in reversed(request_log):
+        if isinstance(record, dict) and record.get("node_id") == node_id:
+            record["final_artifact"] = artifact
+            return
+
+
+def _assert_business_output(*, node_id: str, scenario: dict[str, Any], artifact: BaseModel) -> None:
+    if node_id != "personalized_copy_generation":
+        return
+    if not isinstance(scenario, dict):
+        return
+    if int(scenario.get("target_product_count") or 0) <= 0:
+        return
+    data = artifact.model_dump(mode="json")
+    if not data.get("candidates"):
+        raise BusinessOutputError(
+            "personalized_copy_generation produced zero candidates for a non-empty request"
+        )

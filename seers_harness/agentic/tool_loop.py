@@ -53,7 +53,7 @@ def run_skill_via_tools(
     ]
     # state["payload"] is the handler-side ground truth for evidence-path resolution
     # (record_factor / record_candidate / judge_candidate all read it).
-    state: dict[str, Any] = {"payload": payload}
+    state: dict[str, Any] = {"payload": payload, "skill_name": skill_name}
     tool_calls_made = 0
     usage: dict[str, Any] = {}
 

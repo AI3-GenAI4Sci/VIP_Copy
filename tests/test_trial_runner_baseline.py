@@ -19,7 +19,8 @@ from tests.test_trial_runner import _build_live_skill_root, _build_scenario_for_
 def _build_full_live_skill_root(path: Path) -> Path:
     live = _build_live_skill_root(path)
     for skill_name in (
-        "generate-copy-candidates",
+        "personalized-user-mining",
+        "personalized-copy-generation",
         "personalized-copy-rubric-judge",
     ):
         skill_dir = live / skill_name
@@ -48,8 +49,8 @@ def test_run_request_baseline_no_patch_returns_outcome(tmp_path: Path) -> None:
     assert outcome.success is True
     assert outcome.trial_delta_id is None
     assert set(outcome.artifact_paths) == {
-        "factor_discovery",
-        "copy_generation",
+        "personalized_user_mining",
+        "personalized_copy_generation",
         "personalized_copy_rubric",
     }
     assert outcome.tool_call_count == 6
@@ -57,7 +58,7 @@ def test_run_request_baseline_no_patch_returns_outcome(tmp_path: Path) -> None:
 
 def test_run_request_baseline_does_not_modify_live_skill_root(tmp_path: Path) -> None:
     live = _build_full_live_skill_root(tmp_path / "live")
-    target = live / "discover-personalization-factors/SKILL.md"
+    target = live / "personalized-copy-generation/SKILL.md"
     before = target.read_text(encoding="utf-8")
     runtime = make_runtime(tmp_path / "artifacts", build_full_chain_script())
 
@@ -82,7 +83,7 @@ def test_run_request_baseline_does_not_emit_trial_events(tmp_path: Path) -> None
     outcome = run_request_baseline(
         runtime=runtime,
         scenario=_build_scenario_for_smoke(),
-        nodes=make_nodes()[:1],
+        nodes=make_nodes()[1:2],
         live_skill_root=live,
         workspace_dir=tmp_path / "baseline-workspace",
         request_id="R-baseline",
@@ -95,8 +96,8 @@ def test_run_request_baseline_does_not_emit_trial_events(tmp_path: Path) -> None
 
 
 def test_run_request_trial_sends_patched_skill_prose_to_provider(tmp_path: Path) -> None:
-    live = _build_live_skill_root(tmp_path / "live")
-    target = live / "discover-personalization-factors/SKILL.md"
+    live = _build_full_live_skill_root(tmp_path / "live")
+    target = live / "personalized-copy-generation/SKILL.md"
     original = target.read_text(encoding="utf-8")
     patched = "# PATCHED trial prose\n\nunique-patched-token\n"
     provider = build_full_chain_script()
@@ -105,11 +106,11 @@ def test_run_request_trial_sends_patched_skill_prose_to_provider(tmp_path: Path)
     outcome = run_request_trial(
         runtime=runtime,
         scenario=_build_scenario_for_smoke(),
-        nodes=make_nodes()[:1],
+        nodes=make_nodes()[1:2],
         live_skill_root=live,
         workspace_dir=tmp_path / "trial-workspace",
         patch=SkillDeltaPatch(
-            target_path="discover-personalization-factors/SKILL.md",
+            target_path="personalized-copy-generation/SKILL.md",
             original_text_sha256=sha256_of_text(original),
             replacement_text=patched,
         ),

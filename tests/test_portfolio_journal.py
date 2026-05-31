@@ -18,7 +18,8 @@ def _row(delta_id: str = "D-1") -> DeltaPortfolioRow:
     return DeltaPortfolioRow(
         delta_id=delta_id,
         target_skill="current/personalized-copy-generation/SKILL.md",
-        change_type="modify_skill",
+        function_id="f_user_factor_to_product_hook",
+        operation="modify",
         observation="o",
         proposed_change="c",
         evidence_refs=[{"path": "p", "value": None}],

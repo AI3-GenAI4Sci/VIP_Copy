@@ -6,8 +6,8 @@ trial/sedimentation code will read and write.
 """
 
 from seers_harness.evolution.delta_portfolio import (
-    ChangeType,
     DeltaDistillationArtifact,
+    DeltaOperation,
     DeltaPortfolioRow,
     DeltaProposal,
     DeltaStatus,
@@ -24,8 +24,8 @@ from seers_harness.evolution.delta_portfolio import (
 from seers_harness.evolution.promotion_smoke import build_promotion_smoke_report
 
 __all__ = [
-    "ChangeType",
     "DeltaDistillationArtifact",
+    "DeltaOperation",
     "DeltaPortfolioRow",
     "DeltaProposal",
     "DeltaStatus",

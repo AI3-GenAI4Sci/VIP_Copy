@@ -4,6 +4,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from seers_harness.core.errors import (
+    BusinessOutputError,
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderResponseError,
@@ -35,6 +36,7 @@ def _schema_validation_error() -> ValidationError:
         (ProviderRateLimitError("rate limited"), "rate_limit"),
         (ProviderTransientError("temporary outage"), "transient"),
         (ProviderResponseError("bad tool args"), "malformed_tool_args"),
+        (BusinessOutputError("zero candidates"), "business_output"),
         (_schema_validation_error(), "schema_violation"),
         (KeyError("foo"), "runner_bug"),
         (ValueError("bar"), "runner_bug"),

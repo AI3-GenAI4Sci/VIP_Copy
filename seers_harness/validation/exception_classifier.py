@@ -54,6 +54,7 @@ from typing import Literal
 from pydantic import ValidationError as _PydanticValidationError
 
 from seers_harness.core.errors import (
+    BusinessOutputError,
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderResponseError,
@@ -102,6 +103,7 @@ FailureClass = Literal[
     "rate_limit",
     "transient",
     "malformed_tool_args",
+    "business_output",
     "schema_violation",
     "runner_bug",
     "ok",
@@ -113,6 +115,7 @@ _FAILURE_CLASS_DISPATCH: tuple[tuple[type[BaseException], FailureClass], ...] = 
     (ProviderRateLimitError, "rate_limit"),
     (ProviderTransientError, "transient"),
     (ProviderResponseError, "malformed_tool_args"),
+    (BusinessOutputError, "business_output"),
     (_PydanticValidationError, "schema_violation"),
 )
 

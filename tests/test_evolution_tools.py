@@ -33,7 +33,7 @@ from seers_harness.tools.evolution_tools import (
 def _valid_observation_args() -> dict:
     return {
         "delta_id": "D-1",
-        "target_skill": "current/discover-personalization-factors/SKILL.md",
+        "target_skill": "current/personalized-copy-generation/SKILL.md",
         "observation": "factor 3 transcribed a behavior token verbatim",
         "evidence_refs": [
             {
@@ -47,8 +47,9 @@ def _valid_observation_args() -> dict:
 def _valid_change_args() -> dict:
     return {
         "delta_id": "D-1",
-        "target_skill": "current/generate-copy-candidates/SKILL.md",
-        "change_type": "modify_skill",
+        "target_skill": "current/personalized-copy-generation/SKILL.md",
+        "function_id": "f_user_factor_to_product_hook",
+        "operation": "modify",
         "observation": "factor 3 transcribed a behavior token verbatim",
         "proposed_change": (
             "add a reflect question that asks whether the disposition "
@@ -57,7 +58,7 @@ def _valid_change_args() -> dict:
         "evidence_refs": [
             {"path": "request_42.factor_3.text", "value": None}
         ],
-        "applicable_surface": ["factor_discovery"],
+        "applicable_surface": ["personalized_copy_generation"],
         "failure_types": ["token_leak"],
     }
 
@@ -86,7 +87,7 @@ def test_record_delta_change_appends_and_returns_recorded() -> None:
     state: dict = {}
     out = record_delta_change(_valid_change_args(), state)
     assert out == "recorded"
-    assert state["delta_changes"][0]["change_type"] == "modify_skill"
+    assert state["delta_changes"][0]["operation"] == "modify"
     assert state["delta_changes"][0]["evidence_refs"]
 
 
@@ -204,13 +205,13 @@ def test_record_delta_observation_rejects_self_rated_metric_arg(
 # --------------------------------------------------------------------------- #
 
 
-def test_record_delta_change_rejects_unknown_change_type() -> None:
+def test_record_delta_change_rejects_unknown_operation() -> None:
     args = _valid_change_args()
-    args["change_type"] = "rewrite_everything"
+    args["operation"] = "rewrite_everything"
     state: dict = {}
     with pytest.raises(ToolValidationError) as exc_info:
         record_delta_change(args, state)
-    assert exc_info.value.arg_path == "change_type"
+    assert exc_info.value.arg_path == "operation"
 
 
 def test_record_delta_change_rejects_empty_evidence_refs() -> None:
@@ -248,7 +249,7 @@ def test_submit_final_rejects_unknown_top_level_field() -> None:
 
 def test_target_skill_must_match_pattern() -> None:
     args = _valid_change_args()
-    args["target_skill"] = "discover-personalization-factors"
+    args["target_skill"] = "personalized-copy-generation"
     state: dict = {}
 
     with pytest.raises(ToolValidationError) as exc_info:
@@ -267,7 +268,7 @@ def test_target_skill_pattern_accepts_canonical() -> None:
 
     assert out == "recorded"
     assert state["delta_changes"][0]["target_skill"] == (
-        "current/generate-copy-candidates/SKILL.md"
+        "current/personalized-copy-generation/SKILL.md"
     )
 
 
@@ -301,13 +302,17 @@ def test_skill_prose_has_dual_track_sections_and_no_user_example_phrases() -> No
     )
     text = skill_path.read_text(encoding="utf-8")
 
-    assert text.count("## Trajectory attention model") == 1
-    assert text.count("## target_skill format") == 1
+    assert text.count("## 核心定义") == 1
+    assert text.count("## 成功路径与失败路径") == 1
+    assert text.count("## target_skill 格式") == 1
     for required in (
-        "success-path pattern attention",
-        "failure-path pattern attention",
-        "current/generate-copy-candidates/SKILL.md",
-        "current/discover-personalization-factors/SKILL.md",
+        "Skill = {f_signal, f_factor, f_copy, f_judge, f_tool, f_finish, ...}",
+        "`add`",
+        "`modify`",
+        "`delete`",
+        "成功路径",
+        "失败路径",
+        "current/personalized-copy-generation/SKILL.md",
         "record_delta_observation",
         "record_delta_change",
         "submit_delta_distillation_final",

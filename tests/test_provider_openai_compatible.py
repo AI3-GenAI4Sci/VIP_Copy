@@ -96,7 +96,7 @@ def test_generate_with_tools_passes_locked_runtime_params_every_call(
         fake_openai_response(tool_calls=None, finish_reason="stop")
     )
     provider.generate_with_tools(
-        node_id="factor_discovery", skill_bundle="sb_a",
+        node_id="personalized_copy_generation", skill_bundle="sb_a",
         messages=[{"role": "user", "content": "A"}],
         tools=[{"type": "function", "function": {"name": "x"}}],
     )
@@ -104,7 +104,7 @@ def test_generate_with_tools_passes_locked_runtime_params_every_call(
         fake_openai_response(tool_calls=None, finish_reason="stop")
     )
     provider.generate_with_tools(
-        node_id="copy_generation", skill_bundle="sb_b",
+        node_id="personalized_copy_generation", skill_bundle="sb_b",
         messages=[{"role": "user", "content": "B"}],
         tools=[{"type": "function", "function": {"name": "y"}}],
     )
@@ -206,14 +206,14 @@ def test_parse_retry_logs_attempt_without_raw_arguments(
     fake_openai_client.chat.completions.create = _create
     with pytest.raises(ProviderResponseError):
         provider.generate_with_tools(
-            node_id="factor_discovery",
+            node_id="personalized_copy_generation",
             skill_bundle="sb",
             messages=[{"role": "user", "content": "go"}],
             tools=[],
         )
 
     captured = capsys.readouterr()
-    assert "[provider] parse_retry node=factor_discovery attempt=1/2" in captured.err
+    assert "[provider] parse_retry node=personalized_copy_generation attempt=1/2" in captured.err
     assert '{"factor_id"' not in captured.err
 
 

@@ -130,10 +130,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from seers_harness.domain.models import (
-    CopyGenerationArtifact,
-    FactorDiscoveryArtifact,
-    PersonalizedCopyGenerationArtifact,
     PersonalizedCopyRubricArtifact,
+    UserPersonalizationArtifact,
 )
 from seers_harness.evolution.delta_portfolio import (
     DeltaDistillationArtifact,
@@ -166,8 +164,8 @@ from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
 from seers_harness.validation.evolution_snapshot import write_evolution_snapshot
 from seers_harness.validation.machine_judges import (
-    extract_len_covers_product_ids,
-    extract_len_claim_text,
+    extract_len_need_or_pain_text,
+    extract_len_user_factor_ids,
     judge_val01,
     judge_val02,
     judge_val04,
@@ -179,6 +177,10 @@ from seers_harness.validation.exception_classifier import (
 )
 from seers_harness.validation.index_writer import write_index
 from seers_harness.validation.batch_summary_writer import write_batch_summary
+from seers_harness.validation.offline_export import (
+    admitted_copy_rows,
+    write_offline_copy_assets,
+)
 from seers_harness.validation.recording_provider import (
     RecordingProvider,
     set_current_node_id,
@@ -576,11 +578,11 @@ def _distill_after_stage1(
 def _patch_from_portfolio_row(
     row: DeltaPortfolioRow, live_skill_root: Path
 ) -> SkillDeltaPatch | None:
-    if row.change_type != "modify_skill":
+    if row.operation != "modify":
         print(
             "[runner] trial_skipped "
             f"delta_id={row.delta_id} "
-            f"reason=non_modify_skill change_type={row.change_type}",
+            f"reason=non_modify_operation operation={row.operation}",
             file=sys.stderr,
         )
         return None
@@ -668,15 +670,20 @@ def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRunti
 def _artifact_behavioral_metrics(
     outcome_artifact_paths: dict[str, Path],
 ) -> dict[str, float]:
-    factor_path = outcome_artifact_paths.get("personalized_copy_generation")
-    if factor_path is None or not Path(factor_path).exists():
+    user_path = outcome_artifact_paths.get("personalized_user_mining")
+    if user_path is None or not Path(user_path).exists():
         return {}
-    raw = json.loads(Path(factor_path).read_text(encoding="utf-8"))
-    first_factor = (raw.get("factors") or [{}])[0] if isinstance(raw, dict) else {}
+    raw = json.loads(Path(user_path).read_text(encoding="utf-8"))
+    user_factors = raw.get("user_factors") or [] if isinstance(raw, dict) else []
+    first_factor = user_factors[0] if user_factors else {}
     artifact = {
-        "covers_product_ids": first_factor.get("covers_product_ids", []),
-        "claim_text": first_factor.get("claim", ""),
-        "signal_pattern": first_factor.get("signal_pattern", "") or "",
+        "user_factor_ids": [
+            str(f.get("user_factor_id"))
+            for f in user_factors
+            if isinstance(f, dict) and f.get("user_factor_id")
+        ],
+        "need_or_pain_text": first_factor.get("need_or_pain", ""),
+        "signal_basis": first_factor.get("signal_basis", "") or "",
     }
     val01, _ = judge_val01(artifact)
     val02, _ = judge_val02(artifact)
@@ -685,9 +692,9 @@ def _artifact_behavioral_metrics(
         "val01_pass": float(val01),
         "val02_pass": float(val02),
         "val04_pass": float(val04),
-        "covers_product_count": float(extract_len_covers_product_ids(artifact)),
-        "claim_length": float(
-            extract_len_claim_text(artifact)
+        "user_factor_count": float(extract_len_user_factor_ids(artifact)),
+        "need_or_pain_length": float(
+            extract_len_need_or_pain_text(artifact)
         ),
     }
 
@@ -786,23 +793,21 @@ def _run_one_request(
         # D-19 routing.
         result_paths = runtime.run_request(scenario=scenario, nodes=list(nodes))
 
-        # Parse the merged generation artifact for the index row's
-        # extreme-sample columns. Only the first node's artifact carries
-        # the four E1-E4 columns in the current schema (see 07-03
-        # machine_judges).
-        factor_path = result_paths.get("personalized_copy_generation")
-        if factor_path is not None and Path(factor_path).exists():
+        user_factor_path = result_paths.get("personalized_user_mining")
+        if user_factor_path is not None and Path(user_factor_path).exists():
             try:
-                raw = json.loads(Path(factor_path).read_text(encoding="utf-8"))
-                PersonalizedCopyGenerationArtifact.model_validate(raw)
-                # Promote the FIRST factor (or empty dict) so the row's
-                # extractors (covers / claim_text / signal_pattern)
-                # find the right keys at the top level.
-                first_factor = (raw.get("factors") or [{}])[0]
+                raw = json.loads(Path(user_factor_path).read_text(encoding="utf-8"))
+                UserPersonalizationArtifact.model_validate(raw)
+                user_factors = raw.get("user_factors") or []
+                first_factor = user_factors[0] if user_factors else {}
                 record["artifact"] = {
-                    "covers_product_ids": first_factor.get("covers_product_ids", []),
-                    "claim_text": first_factor.get("claim", ""),
-                    "signal_pattern": first_factor.get("signal_pattern", "") or "",
+                    "user_factor_ids": [
+                        str(f.get("user_factor_id"))
+                        for f in user_factors
+                        if isinstance(f, dict) and f.get("user_factor_id")
+                    ],
+                    "need_or_pain_text": first_factor.get("need_or_pain", ""),
+                    "signal_basis": first_factor.get("signal_basis", "") or "",
                 }
             except Exception:
                 # Schema validation / JSON parse failure surfaces as a
@@ -812,6 +817,7 @@ def _run_one_request(
                 traceback.print_exc(file=sys.stderr)
                 raise
 
+        rubric_artifact: dict[str, Any] | None = None
         # Validate the remaining artifact so VAL-04 backstop fires.
         for node_id, model in [
             ("personalized_copy_rubric", PersonalizedCopyRubricArtifact),
@@ -820,7 +826,18 @@ def _run_one_request(
             if p is None or not Path(p).exists():
                 raise RuntimeError(f"missing artifact for node {node_id} in {request_id}")
             raw = json.loads(Path(p).read_text(encoding="utf-8"))
-            model.model_validate(raw)
+            parsed = model.model_validate(raw)
+            if node_id == "personalized_copy_rubric":
+                rubric_artifact = parsed.model_dump(mode="json")
+
+        copy_path = result_paths.get("personalized_copy_generation")
+        if copy_path is not None and rubric_artifact is not None:
+            generation_artifact = json.loads(Path(copy_path).read_text(encoding="utf-8"))
+            record["offline_copy_rows"] = admitted_copy_rows(
+                scenario=scenario,
+                generation_artifact=generation_artifact,
+                rubric_artifact=rubric_artifact,
+            )
 
         _record_host_baseline_outcome(record, runtime)
         applicable_surface = _applicable_surface_for(nodes, delta_portfolio)
@@ -1204,6 +1221,10 @@ def _run_stage(
         stage_dir / "index.json",
         final_portfolio=delta_portfolio,
     )
+    offline_rows: list[dict[str, Any]] = []
+    for record in records:
+        offline_rows.extend(record.get("offline_copy_rows") or [])
+    write_offline_copy_assets(offline_rows, stage_dir)
 
     # A stage passes only when every submitted request produced a
     # record without an exception (and the run did not abort early).

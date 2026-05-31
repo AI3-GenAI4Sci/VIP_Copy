@@ -77,13 +77,14 @@ def _valid_delta_row(
     *,
     delta_id: str = "D-test",
     target_skill: str = "current/test-skill/SKILL.md",
-    change_type: str = "modify_skill",
+    operation: str = "modify",
     proposed_change: str = "replacement skill text",
 ) -> DeltaPortfolioRow:
     return DeltaPortfolioRow(
         delta_id=delta_id,
         target_skill=target_skill,
-        change_type=change_type,
+        function_id="f_user_factor_to_product_hook",
+        operation=operation,
         observation="copy generation needs tighter anchoring",
         proposed_change=proposed_change,
         evidence_refs=[{"path": "personalized_copy_generation.factors.0", "value": None}],
@@ -151,29 +152,44 @@ class _FakeRuntime:
 
     def run_request(self, *, scenario, nodes):
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        user = self.output_dir / "user.json"
         generation = self.output_dir / "generation.json"
         rubric = self.output_dir / "rubric.json"
+        user.write_text(
+            json.dumps(
+                {
+                    "user_factors": [
+                        {
+                            "user_factor_id": "uf1",
+                            "signal_basis": "compact preference signals",
+                            "need_or_pain": "prefers short copy",
+                            "scene_trigger": "feed browsing",
+                            "buying_heuristic": "low effort comparison",
+                            "expression_hooks": ["short", "direct"],
+                            "evidence_refs": [
+                                {
+                                    "path": "personalized_user_mining.user_factors.0",
+                                    "value": None,
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         generation.write_text(
             json.dumps(
                 {
-                    "factors": [
-                        {
-                            "factor_id": "f1",
-                            "covers_product_ids": ["p1"],
-                            "signal_pattern": "compact preference signals",
-                            "claim": "prefers short copy",
-                            "mechanism": "the request rewards concise expression",
-                            "manifestation": "responds to direct slogan copy",
-                            "product_fit": "p1 can be framed in a short result line",
-                            "evidence": ["personalized_copy_generation.factors.0"],
-                        }
-                    ],
                     "candidates": [
                         {
                             "candidate_id": "c1",
                             "product_id": "p1",
                             "text": "Short copy",
-                            "source_factor_id": "f1",
+                            "source_user_factor_id": "uf1",
+                            "commercial_angle": "short direct hook",
+                            "product_binding": "p1 supports concise result line",
+                            "fact_binding": "product fact is tied to the hook",
                         }
                     ]
                 }
@@ -189,30 +205,30 @@ class _FakeRuntime:
                             "candidate_index": 0,
                             "product_id": "p1",
                             "copy_text": "Short copy",
-                            "factor_id": "f1",
+                            "user_factor_id": "uf1",
                             "axis_scores": [
                                 {
-                                    "axis_id": "factor_alignment",
+                                    "axis_id": "user_factor_grounding",
                                     "score": 4,
                                     "diagnostic": "aligned",
                                 },
                                 {
-                                    "axis_id": "personalized_distinction",
+                                    "axis_id": "product_binding",
                                     "score": 3,
                                     "diagnostic": "specific enough",
                                 },
                                 {
-                                    "axis_id": "slogan_quality",
+                                    "axis_id": "personalized_conversion",
                                     "score": 4,
                                     "diagnostic": "copy-like",
                                 },
                                 {
-                                    "axis_id": "product_relevance",
+                                    "axis_id": "commercial_sharpness",
                                     "score": 3,
                                     "diagnostic": "visible product tie",
                                 },
                                 {
-                                    "axis_id": "naturalness",
+                                    "axis_id": "expression_boundary",
                                     "score": 4,
                                     "diagnostic": "natural",
                                 },
@@ -229,6 +245,7 @@ class _FakeRuntime:
             encoding="utf-8",
         )
         return {
+            "personalized_user_mining": user,
             "personalized_copy_generation": generation,
             "personalized_copy_rubric": rubric,
         }
@@ -239,6 +256,24 @@ class _TrialFailingRuntime(_FakeRuntime):
         if "trial_workspace" in str(self.output_dir):
             raise AssertionError("trial branch failed")
         return super().run_request(scenario=scenario, nodes=nodes)
+
+
+class _AdmitRuntime(_FakeRuntime):
+    def run_request(self, *, scenario, nodes):
+        paths = super().run_request(scenario=scenario, nodes=nodes)
+        rubric_path = paths["personalized_copy_rubric"]
+        rubric = json.loads(rubric_path.read_text(encoding="utf-8"))
+        rubric["judgments"][0]["total_score"] = 21
+        rubric["judgments"][0]["axis_scores"] = [
+            {"axis_id": "user_factor_grounding", "score": 5, "diagnostic": "aligned"},
+            {"axis_id": "product_binding", "score": 4, "diagnostic": "specific"},
+            {"axis_id": "personalized_conversion", "score": 4, "diagnostic": "copy-like"},
+            {"axis_id": "commercial_sharpness", "score": 4, "diagnostic": "visible product tie"},
+            {"axis_id": "expression_boundary", "score": 4, "diagnostic": "natural"},
+        ]
+        rubric["judgments"][0]["decision"] = "admit"
+        rubric_path.write_text(json.dumps(rubric), encoding="utf-8")
+        return paths
 
 
 class _DistillProvider:
@@ -305,7 +340,8 @@ def _distill_delta(delta_id="D-distilled"):
     return {
         "delta_id": delta_id,
         "target_skill": "current/test-skill/SKILL.md",
-        "change_type": "modify_skill",
+        "function_id": "f_user_factor_to_product_hook",
+        "operation": "modify",
         "observation": "the trajectory missed a reusable anchor",
         "proposed_change": "distilled full replacement text",
         "evidence_refs": [{"path": "personalized_copy_generation.factors.0", "value": None}],
@@ -352,6 +388,33 @@ def test_run_stage_fail_record_has_failure_class_from_cause_chain(monkeypatch, t
     )
 
     assert result.records[0]["failure_class"] == "auth"
+
+
+def test_run_stage_writes_offline_copy_assets_for_admitted_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "WorkflowRuntime", _AdmitRuntime)
+    monkeypatch.setitem(runner._STAGE_CONFIG, 1, (1, 1))
+
+    result = runner._run_stage(
+        stage=1,
+        request_ids=["req-export"],
+        scenario_loader=lambda request_id: {
+            "request_id": request_id,
+            "user_state": {"user_id": "user-export"},
+        },
+        nodes=[],
+        provider_factory=lambda: object(),
+        out_dir=tmp_path,
+        batch_id="batch-test",
+        delta_portfolio=[],
+        live_skill_root=tmp_path / "workflow-skills",
+    )
+
+    assert result.passed is True
+    csv_text = (result.stage_dir / "offline_copy_assets.csv").read_text(encoding="utf-8")
+    jsonl_text = (result.stage_dir / "offline_copy_assets.jsonl").read_text(encoding="utf-8")
+    assert "user_id,request_id,copy" in csv_text
+    assert "user-export,req-export,Short copy" in csv_text
+    assert json.loads(jsonl_text)["copy"] == "Short copy"
 
 
 def test_run_one_request_fires_trial_when_portfolio_nonempty(monkeypatch, tmp_path):
@@ -524,10 +587,10 @@ def test_run_one_request_trial_failure_does_not_abort_host(monkeypatch, tmp_path
     assert entries[0].success is False
 
 
-def test_run_one_request_skips_non_modify_skill_delta(monkeypatch, tmp_path):
+def test_run_one_request_skips_non_modify_delta(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "WorkflowRuntime", _FakeRuntime)
     live_skill_root, target, _original = _write_live_skill_root(tmp_path)
-    portfolio = [_valid_delta_row(target_skill=target, change_type="add_skill")]
+    portfolio = [_valid_delta_row(target_skill=target, operation="add")]
     request_dir = tmp_path / "req"
 
     record = runner._run_one_request(
@@ -546,16 +609,16 @@ def test_run_one_request_skips_non_modify_skill_delta(monkeypatch, tmp_path):
     assert portfolio[0].sample_count == 0
 
 
-def test_patch_from_portfolio_row_warns_on_non_modify_skill(tmp_path, capsys):
+def test_patch_from_portfolio_row_warns_on_non_modify(tmp_path, capsys):
     live_skill_root, target, _original = _write_live_skill_root(tmp_path)
-    row = _valid_delta_row(target_skill=target, change_type="add_skill")
+    row = _valid_delta_row(target_skill=target, operation="add")
 
     patch = runner._patch_from_portfolio_row(row, live_skill_root)
     captured = capsys.readouterr()
 
     assert patch is None
     assert "trial_skipped" in captured.err
-    assert "non_modify_skill" in captured.err
+    assert "non_modify" in captured.err
     assert "D-test" in captured.err
 
 

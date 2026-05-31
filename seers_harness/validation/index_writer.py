@@ -19,14 +19,14 @@ Top-level keys (per D-22d):
 
 Each row carries the following sortable / fidelity columns from D-16:
 
-    len_covers_product_ids                              # int   — E1 sort desc (longest covers)
-    len_transferable_disposition_text                   # int   — SHARED column for E2/E3:
+    len_user_factor_ids                              # int   — E1 sort desc (most factors)
+    len_need_or_pain_text             # int   — SHARED column for E2/E3:
                                                                   E2 sort asc  (shortest text)
                                                                   E3 sort desc (longest text)
                                                                   same column, opposite direction
-    transferable_disposition_text                       # str   — raw passthrough fidelity
+    need_or_pain_text                # str   — raw passthrough fidelity
                                                                   (NOT an E-dimension label)
-    literal_overlap_user_signal_vs_transferable_disposition  # float — E4 sort desc (highest overlap)
+    literal_overlap_signal_basis_vs_need     # float — E4 sort desc (highest overlap)
 
 Plus the four VAL booleans and the per-request flags:
 
@@ -47,7 +47,7 @@ import or instrument the capture layer. It consumes only:
 
 JSON style follows the workspace pattern from
 ``seers_harness/evolution/promotion_smoke.py``: ``indent=2`` + trailing
-newline. ``ensure_ascii=False`` so the raw Chinese disposition text
+newline. ``ensure_ascii=False`` so the raw Chinese claim text
 in the passthrough column survives intact for human case-reading
 (matches the policy already adopted in 07-02 ``evidence_writer.py``).
 """
@@ -59,10 +59,10 @@ from pathlib import Path
 from typing import Any
 
 from seers_harness.validation.machine_judges import (
-    extract_len_covers_product_ids,
-    extract_len_transferable_disposition_text,
+    extract_len_user_factor_ids,
+    extract_len_need_or_pain_text,
     extract_literal_overlap,
-    extract_transferable_disposition_text,
+    extract_need_or_pain_text,
     judge_val01,
     judge_val02,
     judge_val04,
@@ -109,20 +109,18 @@ def write_index(
         val02_pass, _ = judge_val02(artifact)
         val04_pass, _ = judge_val04(artifact)
 
-        # D-16 sortable columns. E2 and E3 share
-        # len_transferable_disposition_text — same column, opposite
-        # sort direction. The raw text passthrough is fidelity, NOT
-        # an E-dimension.
+        # D-16 sortable columns. E2 and E3 share len_need_or_pain_text;
+        # the raw text passthrough is fidelity, NOT an E-dimension.
         row: dict[str, Any] = {
             "node_id": _safe_str(record, "node_id"),
-            # E1 — sort desc — longest covers_product_ids
-            "len_covers_product_ids": extract_len_covers_product_ids(artifact),
+            # E1 — sort desc — most user_factor_ids
+            "len_user_factor_ids": extract_len_user_factor_ids(artifact),
             # E2 (asc, shortest) AND E3 (desc, longest) — same column
-            "len_transferable_disposition_text": extract_len_transferable_disposition_text(artifact),
+            "len_need_or_pain_text": extract_len_need_or_pain_text(artifact),
             # raw passthrough — NOT an E-dimension
-            "transferable_disposition_text": extract_transferable_disposition_text(artifact),
+            "need_or_pain_text": extract_need_or_pain_text(artifact),
             # E4 — sort desc — highest literal overlap
-            "literal_overlap_user_signal_vs_transferable_disposition": extract_literal_overlap(artifact),
+            "literal_overlap_signal_basis_vs_need": extract_literal_overlap(artifact),
             # VAL booleans — D-12 machine-judged subset; VAL-03 is null
             # because per D-13/D-14 only manual case-reading by the user
             # can produce a verdict.

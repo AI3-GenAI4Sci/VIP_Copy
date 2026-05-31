@@ -19,74 +19,41 @@ class EvidenceRef(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-FactorDirection = Literal["user_to_need", "item_to_need", "cross"]
-
-
-class PersonalizationFactor(BaseModel):
-    factor_id: str | None = None
-    user_side_signal: str | None = None
-    direction: FactorDirection | None = None
-    transferable_disposition: str
+class UserPersonalizationFactor(BaseModel):
+    user_factor_id: str
+    signal_basis: str
+    need_or_pain: str
+    scene_trigger: str = ""
+    buying_heuristic: str = ""
+    expression_hooks: list[str] = Field(default_factory=list)
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
-    bridge: str | None = None
-    covers_product_ids: list[str] = Field(default_factory=list)
-
-    model_config = {"extra": "forbid"}
-
-    @field_validator("evidence_refs", mode="before")
-    @classmethod
-    def _coerce_evidence_refs(cls, value):
-        if isinstance(value, list):
-            out: list[object] = []
-            for item in value:
-                if isinstance(item, str):
-                    out.append({"path": item, "value": None})
-                else:
-                    out.append(item)
-            return out
-        return value
-
-
-class BridgeLogic(BaseModel):
-    product_anchor: str = ""
-    relation_anchor: str = ""
     model_config = {"extra": "forbid"}
 
 
 class CopyCandidate(BaseModel):
-    candidate_id: str | None = None
-    product_id: str | None = None
-    target_product_id: str | None = None
-    group_key: str = ""
+    candidate_id: str
+    product_id: str
+    source_user_factor_id: str
     text: str
-    source_factor_id: str = ""
-    bridge_logic: BridgeLogic | None = None
-    considered_drafts: list[str] = Field(default_factory=list)
-    chosen_draft_index: int | None = None
-    used_copyable_hooks: list[str] = Field(default_factory=list)
-    intended_effect: str = ""
-
+    commercial_angle: str = ""
+    product_binding: str = ""
+    fact_binding: str = ""
     model_config = {"extra": "forbid"}
 
-    @model_validator(mode="after")
-    def _hydrate(self):
-        if not self.product_id and self.target_product_id:
-            object.__setattr__(self, "product_id", self.target_product_id)
-        if not self.product_id:
-            raise ValueError("CopyCandidate requires product_id or target_product_id")
-        if not self.source_factor_id:
-            raise ValueError("CopyCandidate requires source_factor_id")
-        return self
+
+RubricAxisId = Literal[
+    "user_factor_grounding",
+    "product_binding",
+    "personalized_conversion",
+    "commercial_sharpness",
+    "expression_boundary",
+]
 
 
-class PerAxisVerdict(BaseModel):
-    axis_id: str
-    verbatim_candidate_quote: str = ""
-    bridge_to_anchor: str = ""
-    templated_flag: Literal[
-        "ok", "empty", "anchor_echo", "source_path_missing", "quote_too_short"
-    ] = "ok"
-    verdict: Literal["pass", "fail"] = "pass"
+class RubricAxisScore(BaseModel):
+    axis_id: RubricAxisId
+    score: int = Field(ge=0, le=5)
+    diagnostic: str
     model_config = {"extra": "forbid"}
 
 
@@ -98,22 +65,47 @@ class PersonalizedCopyRubricJudgment(BaseModel):
     candidate_index: int | None = None
     product_id: str = ""
     copy_text: str = ""
-    factor_id: str = ""
-    per_axis: list[PerAxisVerdict] = Field(default_factory=list)
-    floor_violations: list[str] = Field(default_factory=list)
-    primary_strength: str = ""
-    primary_risk: str = ""
-    rationale: str = ""
+    user_factor_id: str = ""
+    axis_scores: list[RubricAxisScore] = Field(default_factory=list)
+    total_score: int = Field(default=0, ge=0, le=25)
+    main_strength: str = ""
+    main_weakness: str = ""
+    failure_tags: list[str] = Field(default_factory=list)
     decision: RubricDecision = "hold"
     model_config = {"extra": "forbid"}
 
+    @field_validator("axis_scores")
+    @classmethod
+    def _require_distinct_axis_ids(
+        cls,
+        value: list[RubricAxisScore],
+    ) -> list[RubricAxisScore]:
+        axis_ids = [axis.axis_id for axis in value]
+        if len(axis_ids) != len(set(axis_ids)):
+            raise ValueError("axis_scores axis_id values must be distinct")
+        return value
 
-class FactorDiscoveryArtifact(BaseModel):
-    factors: list[PersonalizationFactor] = Field(default_factory=list)
+    @model_validator(mode="after")
+    def _check_total_score(self):
+        expected = sum(axis.score for axis in self.axis_scores)
+        if self.total_score != expected:
+            raise ValueError(
+                f"total_score must equal sum(axis_scores.score): {expected}"
+            )
+        return self
+
+
+class UserPersonalizationArtifact(BaseModel):
+    user_factors: list[UserPersonalizationFactor] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 
 
 class CopyGenerationArtifact(BaseModel):
+    candidates: list[CopyCandidate] = Field(default_factory=list)
+    model_config = {"extra": "forbid"}
+
+
+class PersonalizedCopyGenerationArtifact(BaseModel):
     candidates: list[CopyCandidate] = Field(default_factory=list)
     model_config = {"extra": "forbid"}
 

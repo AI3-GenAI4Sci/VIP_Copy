@@ -58,7 +58,8 @@ def _make_row(
     return DeltaPortfolioRow(
         delta_id=delta_id,
         target_skill=target_skill,
-        change_type="modify_skill",
+        function_id="f_user_factor_to_product_hook",
+        operation="modify",
         observation="o",
         proposed_change="c",
         evidence_refs=[{"path": "request_42.factor_3.text", "value": None}],

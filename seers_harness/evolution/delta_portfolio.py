@@ -34,12 +34,12 @@ from pydantic import BaseModel, Field, field_validator
 from seers_harness.domain.models import EvidenceRef
 
 
-ChangeType = Literal["modify_skill", "add_skill"]
-"""Phase 6 only allows two change shapes; both are reversible.
+DeltaOperation = Literal["add", "modify", "delete"]
+"""Delta operation over one function in a skill function family.
 
-``modify_skill`` adjusts an existing live skill at trial time without
-overwriting the live file. ``add_skill`` proposes a new experimental skill
-that lives only in the trial workspace until later review.
+``add`` introduces a new sub-function, ``modify`` changes an existing
+sub-function, and ``delete`` removes a sub-function that consistently harms
+the workflow. Trial code only patches live skills for ``modify`` rows.
 """
 
 DeltaStatus = Literal["experimental", "held", "rejected", "ready_for_review"]
@@ -103,7 +103,8 @@ class DeltaProposal(BaseModel):
 
     delta_id: str
     target_skill: str
-    change_type: ChangeType
+    function_id: str
+    operation: DeltaOperation
     observation: str
     proposed_change: str
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
@@ -136,7 +137,8 @@ class DeltaPortfolioRow(BaseModel):
 
     delta_id: str
     target_skill: str
-    change_type: ChangeType
+    function_id: str
+    operation: DeltaOperation
     observation: str
     proposed_change: str
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
@@ -516,7 +518,8 @@ def assemble_portfolio(
             DeltaPortfolioRow(
                 delta_id=proposal.delta_id,
                 target_skill=proposal.target_skill,
-                change_type=proposal.change_type,
+                function_id=proposal.function_id,
+                operation=proposal.operation,
                 observation=proposal.observation,
                 proposed_change=proposal.proposed_change,
                 evidence_refs=list(proposal.evidence_refs),

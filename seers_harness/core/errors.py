@@ -51,6 +51,11 @@ class ToolValidationError(HarnessError):
         self.arg_path = arg_path
 
 
+class BusinessOutputError(HarnessError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message=message, category="business_output", retryable=True)
+
+
 def classify_exception(exc: Exception) -> dict[str, object]:
     category = getattr(exc, "category", None) or infer_category(exc)
     retryable = getattr(exc, "retryable", None)
@@ -61,6 +66,7 @@ def classify_exception(exc: Exception) -> dict[str, object]:
             "provider_response",
             "schema_validation",
             "tool_validation",
+            "business_output",
         }
     return {
         "category": category,

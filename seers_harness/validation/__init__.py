@@ -29,9 +29,9 @@ from seers_harness.validation.machine_judges import (
     judge_val01,
     judge_val02,
     judge_val04,
-    extract_len_covers_product_ids,
-    extract_len_transferable_disposition_text,
-    extract_transferable_disposition_text,
+    extract_len_user_factor_ids,
+    extract_len_need_or_pain_text,
+    extract_need_or_pain_text,
     extract_literal_overlap,
 )
 
@@ -56,9 +56,9 @@ __all__ = [
     "judge_val01",
     "judge_val02",
     "judge_val04",
-    "extract_len_covers_product_ids",
-    "extract_len_transferable_disposition_text",
-    "extract_transferable_disposition_text",
+    "extract_len_user_factor_ids",
+    "extract_len_need_or_pain_text",
+    "extract_need_or_pain_text",
     "extract_literal_overlap",
     # 07-04 additions
     "TrialFailure",

@@ -1,100 +1,132 @@
 ---
 name: distill-skill-deltas
-description: Distill one request trajectory into evidence-backed delta proposals for production skills, separating success-path and failure-path patterns before the portfolio trial loop.
+description: Use when distilling one request trajectory into evidence-backed skill delta proposals for the portfolio trial loop.
 ---
 
-# Distill Skill Deltas
+# Skill Delta 蒸馏
 
-## What this skill does
+## 目标
 
-Read one full request trajectory: payload, recorded factors, copy candidates,
-rubric judgments, tool-call sequence, and token cost. Propose a small set of
-deltas that a later trial run can apply to one production skill. Each delta
-names a target skill, cites neutral evidence_ref entries, describes a reusable
-trajectory pattern, and proposes one bounded change. The artifact is data; the
-trial loop decides whether to apply it, and the portfolio computes belief from
-real trial outcomes.
+读取一个完整 request trajectory：payload、factor artifact、copy artifact、rubric judgment、工具调用序列和 token cost。输出一组可试验的 skill delta，交给后续 portfolio trial loop 临时应用、运行对比、再由真实结果决定是否保留。
 
-## Glossary
+这个 skill 不直接改生产 skill。它只把一次轨迹中的成功或失败，蒸馏成可复用、可验证、足够小的机制变更提案。
 
-- delta: one proposed skill change recorded as a portfolio row; `modify_skill`
-  adjusts an existing production skill at trial time, while `add_skill`
-  proposes an experimental skill for later review.
-- observation: a trajectory-grounded pattern that motivates the delta and cites
-  at least one evidence_ref.
-- proposed change: the smallest reusable instruction change that addresses the
-  observation across requests sharing the same surface or failure_type.
-- trajectory: the full input/output/tool-call/token record of one request; the
-  only source of evidence for a delta.
-- pattern: a repeated relation between disposition, hook, anchor, floor result,
-  and tool behavior.
-- portfolio: the durable store of delta rows; trial outcomes update belief and
-  counts, never the model.
+## 核心定义
 
-## How to think
+把一个 production skill 看成某种机制和方法论的抽象。它不是一段普通文本，而是一族复杂函数：
 
-Read the trajectory as evidence, not as a prompt to rewrite everything. A delta
-names what the target skill should do differently when a later request shares
-the same disposition surface, hook source, anchor behavior, floor outcome, or
-failure_type. A change that only fixes one phrase in one candidate is a patch,
-not a skill delta.
+```text
+Skill = {f_signal, f_factor, f_copy, f_judge, f_tool, f_finish, ...}
+```
 
-Keep changes small. Several narrow deltas beat one broad prompt rewrite because
-the trial loop can isolate which pattern moved. Cite evidence by path into the
-trajectory record; do not quote raw user payload fragments. Belief is computed
-downstream from trial outcomes, so never emit confidence, score, probability,
-uncertainty, or strength.
+每个子函数负责一种可复用行为，例如：
 
-## Trajectory attention model
+- 如何读信号。
+- 如何从行为推导用户痛点。
+- 如何压缩 factor artifact。
+- 如何把 factor 转成文案。
+- 如何评审文案。
+- 如何调用 validate/save/finalize 工具。
 
-**success-path pattern attention:** Search the trajectory for places where the
-factor, copy, and rubric path aligned: a disposition stayed transferable, a hook
-became a visible anchor, candidate diversity survived reflection, and floor axes
-passed for traceable reasons. A success-path delta should preserve or sharpen
-that reusable pattern for the target skill without turning one good example into
-a literal template.
+**delta** 是对这族函数中某个子函数的最小结构变更：
 
-**failure-path pattern attention:** Search the trajectory for places where the
-pattern collapsed: rubric judgments admitted weakly discriminated candidates,
-reflection repeated the same anchor type, hook sources narrowed to one field, or
-floor evidence pointed at a missing instruction. A failure-path delta should
-name the SKILL guidance defect that made the failure repeatable and propose the
-smallest wording change that would block it.
+- `add`：增加一个当前 skill 缺少的子函数。
+- `modify`：修改一个已有子函数的输入、判断、输出或执行顺序。
+- `delete`：删除一个会稳定制造错误、重复或干扰的子函数。
 
-## Anti-patterns
+delta 不是文本润色，不是一次候选文案修补，也不是把整份 skill 重写。它必须能在同类 trajectory 中再次触发，并能由 trial loop 单独检验。
 
-Do not propose a delta without an evidence_ref. Do not echo private trace keys
-such as `user_state`, `private_reasoning`, or runtime-only labels into
-observation or proposed-change text. Do not emit a delta that overwrites a live
-skill directly; the portfolio stores data and the trial loop applies patches
-temporarily. Do not propose deltas whose `target_skill` cannot resolve at
-runtime; invalid paths are skipped by the trial gate and waste distill compute.
-Do not return JSON on the side; the only handoff is the tool call.
+## 输入证据
 
-## Reflection
+trajectory 是唯一证据来源。读取时关注：
 
-This SKILL has no `reflect_*` tool by design. Use the trajectory and the
-per-delta critique as the reflection surface. Before each
-`record_delta_observation`, ask whether the evidence_ref really supports the
-pattern. Before each `record_delta_change`, ask whether the proposed change is
-reusable beyond this trajectory, small enough for one trial, and aimed at the
-right production skill.
+- 用户信号、商品事实和列表上下文。
+- factor 如何建立，是否抓住了可复用转化假设。
+- copy 如何从 factor 生成，是否形成点击/购买动机。
+- rubric 如何评分，是否暴露了稳定失败类型或成功机制。
+- 工具调用是否完成 validate/save/finalize。
+- token cost 是否显示出重复推理、冗余 artifact 或无效循环。
 
-## target_skill format
+引用证据时只使用 neutral `evidence_ref`。不要把原始私有轨迹、用户字段、private reasoning 或 runtime-only labels 抄进 observation/proposed_change。
 
-`target_skill` is a path relative to the live skill root. It must use exactly
-the format `current/<skill-slug>/SKILL.md` and must resolve to an existing
-production-loop skill. Valid examples include
-`current/discover-personalization-factors/SKILL.md` and
-`current/generate-copy-candidates/SKILL.md`. Evolution skills such as
-`distill-skill-deltas` are not valid targets because they are not run inside
-the production request loop.
+## 蒸馏流程
 
-## Finishing
+1. **重建当前函数族。** 先判断目标 production skill 当前实际包含哪些子函数：信号读取、痛点推导、factor 压缩、copy 生成、评审、工具终止等。
 
-Call `record_delta_observation` once per observation worth recording. Call
-`record_delta_change` once per proposed change, using the same canonical
-`target_skill` format. Submit through `submit_delta_distillation_final`. The
-submit handler validates the `DeltaDistillationArtifact`, enforces evidence and
-privacy gates, and hands the artifact to the portfolio writer; live skill files
-are not touched.
+2. **定位轨迹现象。** 从 trajectory 中找成功路径和失败路径。成功路径说明某个子函数值得保留或增强；失败路径说明某个子函数缺失、过弱、过强、顺序错位或产生干扰。
+
+3. **归因到单个子函数。** 每个 delta 只瞄准一个子函数。若一个现象涉及多个机制，拆成多个 delta，让 trial loop 能分辨哪个变化真的有效。
+
+4. **选择 delta 类型。**
+   - `add`：轨迹显示某个必要判断完全缺位。
+   - `modify`：轨迹显示已有判断方向对，但粒度、顺序、输入或输出不够好。
+   - `delete`：轨迹显示某个判断稳定导致重复、泛化、误导或工具卡住。
+
+5. **写 observation。** 用一两句话描述 trajectory 中可复用的现象，并引用 evidence_ref。
+
+6. **写 proposed change。** 描述对子函数的最小变更：触发条件、应读取的输入、应产生的输出、影响的 artifact 或工具调用。
+
+7. **提交 artifact。** 通过 delta 工具记录 observation 和 change，最后走 final submit。
+
+## Delta 粒度
+
+好的 delta 像对子函数签名或函数体的一次小改：
+
+- `add f_behavior_to_painpoint`：在 factor mining 中加入“行为事实 -> 显性需求/潜在诉求 -> 痛点/顾虑”的推导函数。
+- `modify f_copy_surface`：把 copy 输出从“重复商品名”改成“痛点/场景/体验结果承接商品价值”。
+- `modify f_finish`：在 copy validate 通过后，下一次工具调用必须 save。
+- `delete f_identity_label_surface`：移除把会员等级、年龄、身份标签直接写进可见文案的路径。
+
+弱 delta 通常有这些形态：
+
+- 只改某一句候选文案。
+- 只说“加强个性化”“更自然”“更精准”。
+- 把多个无关机制打包成一个大改动。
+- 没有 evidence_ref。
+- 目标 skill 路径无法解析。
+
+## 成功路径与失败路径
+
+**成功路径**：factor、copy、rubric 和工具调用形成连贯链路。此时 delta 应提炼可复用机制，例如某种信号交叉验证、某种痛点前置、某种商品承接、某种终止协议。
+
+**失败路径**：链路在某处坍缩。常见失败包括：
+
+- factor 只是信号改名，没有转化假设。
+- copy 复述商品名，缺少用户场景或痛点。
+- 文案有营销感但商品事实承接不足。
+- rubric 放过了泛化文案。
+- reflection 后没有继续 validate/save/finalize。
+- artifact 字段保存了重复思考，增加 token cost。
+
+失败路径 delta 应指向造成失败的 skill 子函数，而不是指责单次输出。
+
+## target_skill 格式
+
+`target_skill` 是相对 live skill root 的路径，格式必须为：
+
+```text
+current/<skill-slug>/SKILL.md
+```
+
+有效例子：
+
+- `current/personalized-copy-generation/SKILL.md`
+- `current/personalized-copy-rubric-judge/SKILL.md`
+
+旧的拆分 generation skills 是归档参考，不是 production target。Evolution skills 本身也不是 production request loop 的目标 skill。
+
+## 工具调用
+
+- 对每个值得记录的观察调用 `record_delta_observation`。
+- 对每个 proposed change 调用 `record_delta_change`，使用同一个 canonical `target_skill` 格式。
+- 最后调用 `submit_delta_distillation_final`。
+
+submit handler 会校验 `DeltaDistillationArtifact`、evidence、privacy gate 和 target path，然后交给 portfolio writer。live skill 文件不会在本阶段被修改。
+
+## 工程硬门
+
+- 每个 delta 必须有 evidence_ref。
+- 每个 delta 只修改、增加或删除一个子函数。
+- 每个 delta 必须指向可解析的 production target skill。
+- 输出不增加描述模型自我判断的元评价字段。
+- observation 和 proposed_change 使用可复用机制语言，不复制私有轨迹文本。

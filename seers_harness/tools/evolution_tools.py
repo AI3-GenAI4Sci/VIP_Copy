@@ -181,7 +181,8 @@ def record_delta_observation(args: dict, state: dict) -> str:
 class _RecordDeltaChangeArgs(BaseModel):
     delta_id: str
     target_skill: str
-    change_type: str
+    function_id: str
+    operation: str
     observation: str
     proposed_change: str
     evidence_refs: list[dict] = Field(default_factory=list)
@@ -202,13 +203,13 @@ def record_delta_change(args: dict, state: dict) -> str:
             tool_name="record_delta_change",
         ) from exc
     _validate_target_skill_pattern(parsed.target_skill, "record_delta_change")
-    if parsed.change_type not in ("modify_skill", "add_skill"):
+    if parsed.operation not in ("add", "modify", "delete"):
         raise ToolValidationError(
             message=(
-                f"change_type {parsed.change_type!r} must be 'modify_skill' or 'add_skill'"
+                f"operation {parsed.operation!r} must be 'add', 'modify', or 'delete'"
             ),
             tool_name="record_delta_change",
-            arg_path="change_type",
+            arg_path="operation",
         )
     # Validate via the canonical DeltaProposal contract — it enforces
     # extra=forbid on the EvidenceRef shape and non-empty evidence_refs.
@@ -305,7 +306,8 @@ RECORD_DELTA_CHANGE_SPEC: dict = {
         "name": "record_delta_change",
         "description": (
             "Record one proposed change derived from observations. Keep changes "
-            "small and reusable. change_type is 'modify_skill' or 'add_skill'. "
+            "small and reusable. operation is 'add', 'modify', or 'delete' "
+            "for a named skill function. "
             "Cite at least one evidence ref. Do not include self-rated metric "
             "fields — posterior belief is computed from trial outcomes."
         ),
@@ -314,16 +316,17 @@ RECORD_DELTA_CHANGE_SPEC: dict = {
             "type": "object",
             "additionalProperties": False,
             "required": [
-                "delta_id", "target_skill", "change_type",
+                "delta_id", "target_skill", "function_id", "operation",
                 "observation", "proposed_change",
                 "evidence_refs", "applicable_surface", "failure_types",
             ],
             "properties": {
                 "delta_id": {"type": "string"},
                 "target_skill": dict(_TARGET_SKILL_PROPERTY),
-                "change_type": {
+                "function_id": {"type": "string"},
+                "operation": {
                     "type": "string",
-                    "enum": ["modify_skill", "add_skill"],
+                    "enum": ["add", "modify", "delete"],
                 },
                 "observation": {"type": "string"},
                 "proposed_change": {"type": "string"},
@@ -367,16 +370,17 @@ SUBMIT_DELTA_DISTILLATION_FINAL_SPEC: dict = {
                         "type": "object",
                         "additionalProperties": False,
                         "required": [
-                            "delta_id", "target_skill", "change_type",
+                            "delta_id", "target_skill", "function_id", "operation",
                             "observation", "proposed_change",
                             "evidence_refs", "applicable_surface", "failure_types",
                         ],
                         "properties": {
                             "delta_id": {"type": "string"},
                             "target_skill": dict(_TARGET_SKILL_PROPERTY),
-                            "change_type": {
+                            "function_id": {"type": "string"},
+                            "operation": {
                                 "type": "string",
-                                "enum": ["modify_skill", "add_skill"],
+                                "enum": ["add", "modify", "delete"],
                             },
                             "observation": {"type": "string"},
                             "proposed_change": {"type": "string"},

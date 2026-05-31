@@ -71,6 +71,68 @@ IDENTITY_FIELDS = {
     "spu_id",
     "source_spu_id",
 }
+ITEM_ATTRIBUTE_FIELDS = {
+    "item_name",
+    "item_spu_title",
+    "item_cat1_name",
+    "item_cat3_name",
+    "item_brand_name",
+    "brand_level",
+    "item_gender_tag",
+    "item_arriv_price",
+    "tag_price",
+    "discount_rate",
+    "ctr_7d",
+    "cvr_7d",
+    "item_satisfy",
+    "review_cnt",
+    "return_rate_30d",
+    "is_new",
+    "is_hot",
+    "is_exclusive",
+    "gender_match_item_gender_tag",
+    "is_in_user_prefer_brand",
+    "is_in_user_prefer_cat3",
+    "clicked_count_same_brand_30d",
+    "clicked_count_same_cat3_30d",
+    "clicked_count_same_spu_30d",
+    "carted_count_same_brand_30d",
+    "carted_count_same_cat3_30d",
+    "ordered_count_same_brand_90d",
+    "ordered_count_same_cat3_90d",
+    "p_ctr",
+    "p_car",
+    "p_cvr",
+}
+DROP_PRODUCT_ATTRIBUTE_FIELDS = {
+    "active_days_30d",
+    "cat1_id",
+    "city_id",
+    "item_cat3",
+    "item_brand",
+    "is_spu_order",
+    "is_spu_order_clk",
+    "is_spu_order_addcart",
+    "is_spu_order_c",
+    "is_spu_order_c_clk",
+    "is_spu_order_c_addcart",
+    "is_spu_order_c_expose",
+    "is_spu_order_expose",
+    "is_exp_order_c_expose",
+    "is_otd_ad",
+    "is_ctx_item",
+    "timestamp",
+    "click_timestamp_list_topN",
+    "addcart_timestamp_list_topN",
+    "collect_timestamp_list_topN",
+    "order_timestamp_list_topN",
+    "click_timestamp_diff_seconds",
+    "addcart_timestamp_diff_seconds",
+    "collect_timestamp_diff_seconds",
+    "order_timestamp_diff_seconds",
+    "title_attr_size",
+    "score",
+}
 
 FREQ_AGG_FIELDS = {
     "click_goods_id_list_topN": 5,
@@ -172,6 +234,8 @@ def product_from_row(row: dict[str, Any], *, category: str, line_no: int) -> dic
         key: humanize(key, value)
         for key, value in row.items()
         if present(value)
+        and key in ITEM_ATTRIBUTE_FIELDS
+        and key not in DROP_PRODUCT_ATTRIBUTE_FIELDS
         and key not in IDENTITY_FIELDS
         and key not in USER_PROFILE_FIELDS
         and key not in USER_BEHAVIOR_FIELDS

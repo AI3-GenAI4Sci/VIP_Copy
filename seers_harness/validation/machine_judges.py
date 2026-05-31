@@ -7,16 +7,16 @@ sortable columns required by CONTEXT D-16.
 
 E-dimension → column mapping (verbatim contract):
 
-    E1 ↔ len_covers_product_ids                                       (sort desc — longest)
-    E2 ↔ len_claim_text                            (sort asc  — shortest)
-    E3 ↔ len_claim_text                            (sort desc — longest)
+    E1 ↔ len_user_factor_ids                                      (sort desc — most factors)
+    E2 ↔ len_need_or_pain_text                    (sort asc  — shortest)
+    E3 ↔ len_need_or_pain_text                    (sort desc — longest)
          — SAME column as E2, opposite sort direction (D-16)
-    E4 ↔ literal_overlap_signal_pattern_vs_claim     (sort desc — highest)
+    E4 ↔ literal_overlap_signal_basis_vs_need      (sort desc — highest)
 
-The raw-text passthrough column ``claim_text`` is a
-fidelity field so the human auditor can read the claim text after
+The raw-text passthrough column ``need_or_pain_text`` is a
+fidelity field so the human auditor can read the inferred user need after
 navigating by E2 or E3. It is NOT an E-dimension — E2 and E3 share the
-single ``len_claim_text`` integer column at opposite
+single ``len_need_or_pain_text`` integer column at opposite
 sort directions; the raw text rides along for inspection only.
 
 VAL-03 is intentionally absent from this module — D-13 / D-14 require
@@ -54,8 +54,8 @@ from typing import Any
 def judge_val01(artifact: dict[str, Any] | None) -> tuple[bool, str]:
     """VAL-01: structural shape — required keys present in the artifact.
 
-    Required keys: ``covers_product_ids``, ``claim_text``,
-    ``signal_pattern``. Missing key → False with the missing key in the
+    Required keys: ``user_factor_ids``, ``need_or_pain_text``,
+    ``signal_basis``. Missing key → False with the missing key in the
     reason (one-line, machine-friendly).
 
     A ``None`` artifact returns ``(False, "no artifact")`` so the index
@@ -67,14 +67,14 @@ def judge_val01(artifact: dict[str, Any] | None) -> tuple[bool, str]:
         return False, "no artifact"
     if not isinstance(artifact, dict):
         return False, "artifact is not a dict"
-    for key in ("covers_product_ids", "claim_text", "signal_pattern"):
+    for key in ("user_factor_ids", "need_or_pain_text", "signal_basis"):
         if key not in artifact:
             return False, f"missing {key}"
     return True, "ok"
 
 
 def judge_val02(artifact: dict[str, Any] | None) -> tuple[bool, str]:
-    """VAL-02: ``covers_product_ids`` is a non-empty list of ints/strs.
+    """VAL-02: ``user_factor_ids`` is a non-empty list of ids.
 
     No null entries, no empty strings. A list of mixed ints and strings
     is allowed (the underlying domain model declares ``list[str]`` but
@@ -86,25 +86,25 @@ def judge_val02(artifact: dict[str, Any] | None) -> tuple[bool, str]:
         return False, "no artifact"
     if not isinstance(artifact, dict):
         return False, "artifact is not a dict"
-    covers = artifact.get("covers_product_ids")
-    if not isinstance(covers, list):
-        return False, "covers_product_ids is not a list"
-    if len(covers) == 0:
-        return False, "covers_product_ids is empty"
-    for index, item in enumerate(covers):
+    ids = artifact.get("user_factor_ids")
+    if not isinstance(ids, list):
+        return False, "user_factor_ids is not a list"
+    if len(ids) == 0:
+        return False, "user_factor_ids is empty"
+    for index, item in enumerate(ids):
         if item is None:
-            return False, f"covers_product_ids[{index}] is null"
+            return False, f"user_factor_ids[{index}] is null"
         if isinstance(item, bool):
-            return False, f"covers_product_ids[{index}] is bool"
+            return False, f"user_factor_ids[{index}] is bool"
         if isinstance(item, str) and item == "":
-            return False, f"covers_product_ids[{index}] is empty string"
-        if not isinstance(item, (int, str)):
-            return False, f"covers_product_ids[{index}] not int/str"
+            return False, f"user_factor_ids[{index}] is empty string"
+        if not isinstance(item, str):
+            return False, f"user_factor_ids[{index}] not str"
     return True, "ok"
 
 
 def judge_val04(artifact: dict[str, Any] | None) -> tuple[bool, str]:
-    """VAL-04: ``claim_text`` is a non-empty trimmed string.
+    """VAL-04: ``need_or_pain_text`` is a non-empty trimmed string.
 
     The Phase 5 grep gate plus pydantic ``extra="forbid"`` cover token
     leakage / Arabic-digit / state-label leakage at the structural
@@ -115,11 +115,11 @@ def judge_val04(artifact: dict[str, Any] | None) -> tuple[bool, str]:
         return False, "no artifact"
     if not isinstance(artifact, dict):
         return False, "artifact is not a dict"
-    text = artifact.get("claim_text")
+    text = artifact.get("need_or_pain_text")
     if not isinstance(text, str):
-        return False, "claim_text is not a string"
+        return False, "need_or_pain_text is not a string"
     if text.strip() == "":
-        return False, "claim_text is empty after strip"
+        return False, "need_or_pain_text is empty after strip"
     return True, "ok"
 
 
@@ -131,10 +131,10 @@ def judge_val04(artifact: dict[str, Any] | None) -> tuple[bool, str]:
 # Fallback values match the index_writer's per-row defaults so a row
 # for a failed request still sorts cleanly:
 #
-#   len_covers_product_ids                                  → 0
-#   len_claim_text                       → 0
-#   claim_text                           → ""
-#   literal_overlap_signal_pattern_vs_claim → 0.0
+#   len_user_factor_ids                 → 0
+#   len_need_or_pain_text               → 0
+#   need_or_pain_text                   → ""
+#   literal_overlap_signal_basis_vs_need → 0.0
 #
 # E1 (longest covers) sorts descending — failed rows naturally sink
 # to the bottom; E2 (shortest text) sorts ascending — failed rows with
@@ -145,22 +145,22 @@ def judge_val04(artifact: dict[str, Any] | None) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def extract_len_covers_product_ids(artifact: dict[str, Any] | None) -> int:
-    """E1 column: integer length of ``covers_product_ids``.
+def extract_len_user_factor_ids(artifact: dict[str, Any] | None) -> int:
+    """E1 column: integer length of ``user_factor_ids``.
 
     Sort descending → longest list rises to the top (E1 navigates to
     the request whose factor covers the most products).
     """
     if not isinstance(artifact, dict):
         return 0
-    covers = artifact.get("covers_product_ids")
-    if not isinstance(covers, list):
+    ids = artifact.get("user_factor_ids")
+    if not isinstance(ids, list):
         return 0
-    return len(covers)
+    return len(ids)
 
 
-def extract_len_claim_text(artifact: dict[str, Any] | None) -> int:
-    """E2 + E3 shared column: character count of stripped claim text.
+def extract_len_need_or_pain_text(artifact: dict[str, Any] | None) -> int:
+    """E2 + E3 shared column: character count of stripped need text.
 
     SAME column for both E2 and E3 — opposite sort directions:
 
@@ -168,34 +168,34 @@ def extract_len_claim_text(artifact: dict[str, Any] | None) -> int:
         * E3 → sort descending (longest text — verbose / template-heavy factor)
 
     The auditor reads the same numeric column from two ends; the raw
-    text itself lives in the passthrough column (extract_claim_text).
+    text itself lives in the passthrough column (extract_need_or_pain_text).
     """
     if not isinstance(artifact, dict):
         return 0
-    text = artifact.get("claim_text")
+    text = artifact.get("need_or_pain_text")
     if not isinstance(text, str):
         return 0
     return len(text.strip())
 
 
-def extract_claim_text(artifact: dict[str, Any] | None) -> str:
+def extract_need_or_pain_text(artifact: dict[str, Any] | None) -> str:
     """Raw-text passthrough column — NOT an E-dimension.
 
-    Fidelity field so the auditor can read the claim text in-line
+    Fidelity field so the auditor can read the inferred need in-line
     after navigating by E2 or E3. Untrimmed, byte-for-byte from the
     artifact (whitespace preservation matters when the auditor is
     checking template-padding patterns).
     """
     if not isinstance(artifact, dict):
         return ""
-    text = artifact.get("claim_text")
+    text = artifact.get("need_or_pain_text")
     if not isinstance(text, str):
         return ""
     return text
 
 
 def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
-    """E4 column: codepoint-set Jaccard between signal_pattern and claim text.
+    """E4 column: codepoint-set Jaccard between signal basis and need text.
 
     Sort descending → highest overlap rises to the top (E4 navigates to
     the request whose claim text most literally echoes the
@@ -223,13 +223,13 @@ def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
     """
     if not isinstance(artifact, dict):
         return 0.0
-    signal_pattern = artifact.get("signal_pattern")
-    claim = artifact.get("claim_text")
-    if not isinstance(signal_pattern, str) or not isinstance(claim, str):
+    signal_basis = artifact.get("signal_basis")
+    need = artifact.get("need_or_pain_text")
+    if not isinstance(signal_basis, str) or not isinstance(need, str):
         return 0.0
 
-    left_tokens = {ch for ch in signal_pattern.lower() if not ch.isspace()}
-    right_tokens = {ch for ch in claim.lower() if not ch.isspace()}
+    left_tokens = {ch for ch in signal_basis.lower() if not ch.isspace()}
+    right_tokens = {ch for ch in need.lower() if not ch.isspace()}
     if not left_tokens or not right_tokens:
         return 0.0
 
@@ -245,29 +245,30 @@ def extract_literal_overlap(artifact: dict[str, Any] | None) -> float:
 # ---------------------------------------------------------------------------
 
 
-def compute_factor_count_p50(all_factor_artifacts: list[dict]) -> float:
-    """M1: median number of discovered factors per request; threshold >= 3."""
-    counts = [len(d.get("factors", [])) for d in all_factor_artifacts if isinstance(d, dict)]
+def compute_user_factor_count_p50(all_factor_artifacts: list[dict]) -> float:
+    """M1: median number of mined user factors per request; threshold >= 3."""
+    counts = [
+        len(d.get("user_factors", []))
+        for d in all_factor_artifacts
+        if isinstance(d, dict)
+    ]
     return float(statistics.median(counts)) if counts else 0.0
 
 
-def compute_factor_diversity(all_factor_artifacts: list[dict]) -> float:
-    """M2: mean Jaccard distance across covers-product ids and factor claims."""
+def compute_user_factor_diversity(all_factor_artifacts: list[dict]) -> float:
+    """M2: mean Jaccard distance across signal basis and inferred needs."""
     factors = [
         f
         for d in all_factor_artifacts
         if isinstance(d, dict)
-        for f in d.get("factors", [])
+        for f in d.get("user_factors", [])
         if isinstance(f, dict)
     ]
     if len(factors) < 2:
         return 0.0
-    id_sets = [frozenset(f.get("covers_product_ids", [])) for f in factors]
-    text_sets = [
-        _tokenize(str(f.get("claim", "") or ""))
-        for f in factors
-    ]
-    return (_mean_jaccard_distance(id_sets) + _mean_jaccard_distance(text_sets)) / 2
+    signal_sets = [_tokenize(str(f.get("signal_basis", "") or "")) for f in factors]
+    need_sets = [_tokenize(str(f.get("need_or_pain", "") or "")) for f in factors]
+    return (_mean_jaccard_distance(signal_sets) + _mean_jaccard_distance(need_sets)) / 2
 
 
 def compute_copy_candidate_count_p50(all_copy_artifacts: list[dict]) -> float:
@@ -283,7 +284,7 @@ def compute_copy_candidate_count_p50(all_copy_artifacts: list[dict]) -> float:
 
 
 def compute_reflection_trigger_rate(per_request: list[tuple[int, list[str]]]) -> float:
-    """M3b: share of underspecified requests (factor_count < 3) that called reflect_*."""
+    """M3b: share of underspecified requests (user_factor_count < 3) that called reflect_*."""
     underspec = [tools for factor_count, tools in per_request if factor_count < 3]
     if not underspec:
         return 1.0
@@ -294,11 +295,11 @@ def compute_reflection_trigger_rate(per_request: list[tuple[int, list[str]]]) ->
 
 
 def compute_delta_diversity(proposals: list[Any]) -> dict[str, int]:
-    """M4: count distinct delta proposals, targets, and change types."""
+    """M4: count distinct delta proposals, targets, and operations."""
     return {
         "count": len(proposals),
         "unique_targets": len({_field(p, "target_skill") for p in proposals if _field(p, "target_skill")}),
-        "unique_change_types": len({_field(p, "change_type") for p in proposals if _field(p, "change_type")}),
+        "unique_operations": len({_field(p, "operation") for p in proposals if _field(p, "operation")}),
     }
 
 
@@ -315,28 +316,33 @@ def build_behavioral_report(
     """Aggregate M1-M5 from a stage directory without calling capture code."""
     stage_path = Path(stage_dir)
     request_dirs = _request_dirs_from_index(stage_path)
-    factor_artifacts: list[dict] = []
+    user_factor_artifacts: list[dict] = []
     copy_artifacts: list[dict] = []
     reflection_inputs: list[tuple[int, list[str]]] = []
     proposals: list[Any] = []
     folded_portfolio: list[Any] = list(final_portfolio or [])
 
     for request_dir in request_dirs:
+        user_artifact = _read_json_if_present(
+            request_dir / "evidence/personalized_user_mining/artifact.json"
+        )
+        if isinstance(user_artifact, dict):
+            user_factor_artifacts.append(
+                {"user_factors": list(user_artifact.get("user_factors") or [])}
+            )
+            factor_count = len(user_artifact.get("user_factors", []))
+            tools = _tool_names_from_jsonl(
+                request_dir / "evidence/personalized_user_mining/tool_calls.jsonl"
+            )
+            reflection_inputs.append((factor_count, tools))
+
         generation_artifact = _read_json_if_present(
             request_dir / "evidence/personalized_copy_generation/artifact.json"
         )
         if isinstance(generation_artifact, dict):
-            factor_artifacts.append(
-                {"factors": list(generation_artifact.get("factors") or [])}
-            )
             copy_artifacts.append(
                 {"candidates": list(generation_artifact.get("candidates") or [])}
             )
-            factor_count = len(generation_artifact.get("factors", []))
-            tools = _tool_names_from_jsonl(
-                request_dir / "evidence/personalized_copy_generation/tool_calls.jsonl"
-            )
-            reflection_inputs.append((factor_count, tools))
 
         snapshot = _read_json_if_present(request_dir / "evolution_snapshot.json")
         if isinstance(snapshot, dict):
@@ -347,7 +353,7 @@ def build_behavioral_report(
                     {
                         "delta_id": _field(row, "delta_id"),
                         "target_skill": _field(row, "target_skill"),
-                        "change_type": _field(row, "change_type"),
+                        "operation": _field(row, "operation"),
                     }
                     for row in portfolio_rows
                 ]
@@ -355,8 +361,8 @@ def build_behavioral_report(
                 proposals = [{"delta_id": delta_id} for delta_id in snapshot.get("delta_portfolio_after", [])]
 
     return {
-        "factor_count_p50": compute_factor_count_p50(factor_artifacts),
-        "factor_diversity_score": compute_factor_diversity(factor_artifacts),
+        "user_factor_count_p50": compute_user_factor_count_p50(user_factor_artifacts),
+        "user_factor_diversity_score": compute_user_factor_diversity(user_factor_artifacts),
         "copy_candidate_count_p50": compute_copy_candidate_count_p50(copy_artifacts),
         "reflection_triggered_when_underspec_rate": compute_reflection_trigger_rate(reflection_inputs),
         "delta_diversity_score": compute_delta_diversity(proposals),

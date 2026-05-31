@@ -8,7 +8,7 @@ from seers_harness.validation.evidence_writer import flush_evidence
 def test_flush_evidence_preserves_turn_usage_and_writes_aggregate(tmp_path):
     request_log = [
         {
-            "node_id": "copy_generation",
+            "node_id": "personalized_copy_generation",
             "messages": [{"role": "user", "content": "first"}],
             "tool_calls": [{"id": "call-1", "name": "record_candidate"}],
             "last_usage": {
@@ -19,7 +19,7 @@ def test_flush_evidence_preserves_turn_usage_and_writes_aggregate(tmp_path):
             },
         },
         {
-            "node_id": "copy_generation",
+            "node_id": "personalized_copy_generation",
             "messages": [{"role": "user", "content": "second"}],
             "tool_calls": [{"id": "call-2", "name": "submit_copies_final"}],
             "last_usage": {
@@ -33,7 +33,7 @@ def test_flush_evidence_preserves_turn_usage_and_writes_aggregate(tmp_path):
 
     flush_evidence(request_log, tmp_path)
 
-    node_dir = tmp_path / "copy_generation"
+    node_dir = tmp_path / "personalized_copy_generation"
     usage = json.loads((node_dir / "usage.json").read_text(encoding="utf-8"))
     usage_turns = [
         json.loads(line)

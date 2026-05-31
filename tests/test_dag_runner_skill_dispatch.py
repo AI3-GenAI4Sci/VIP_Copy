@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from seers_harness.domain.models import FactorDiscoveryArtifact
+from seers_harness.domain.models import PersonalizedCopyGenerationArtifact
 from seers_harness.provider_runtime.base import ProviderResult
 from seers_harness.workflow.dag_runner import NodeSpec, WorkflowRuntime
 from seers_harness.workflow.skill_loader import (
@@ -45,24 +45,24 @@ _SCENARIO: dict[str, Any] = {
 }
 
 
-_FACTOR_SUBMIT_ARGS = {
-    "factors": [
-        {
-            "factor_id": "F-1",
-            "user_side_signal": "recent skincare search",
-            "direction": "user_to_need",
-            "transferable_disposition": "skincare-curious",
-            "evidence_refs": [
-                {
-                    "path": "user_state.behavior.recent_search_cat3_30d",
-                    "value": "x",
-                }
-            ],
-            "bridge": "skincare interest aligns with product",
-            "covers_product_ids": ["P-001"],
-        }
-    ]
+_CANDIDATE_ARGS = {
+    "candidate_id": "C-1",
+    "product_id": "P-001",
+    "source_user_factor_id": "UF-1",
+    "text": "care result line",
+    "commercial_angle": "care scene",
+    "product_binding": "product supports the scene",
+    "fact_binding": "fact supports the hook",
 }
+
+
+def _copy_args(action: str, candidates: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "action": action,
+        "candidates": candidates or [],
+        "candidate_ids": [],
+        "product_id": "",
+    }
 
 
 @dataclass
@@ -86,15 +86,20 @@ class _CapturingProvider:
         assert system_msg["role"] == "system"
         self.skill_prose_seen.append(system_msg["content"])
         self.node_ids_seen.append(node_id)
-        # Return a happy factor_discovery submission so the loop exits cleanly.
+        # Return a happy merged-generation submission so the loop exits cleanly.
         return ProviderResult(
             payload={},
             usage={},
             tool_calls=[
                 {
                     "id": "c1",
-                    "name": "submit_factors_final",
-                    "arguments": _FACTOR_SUBMIT_ARGS,
+                    "name": "maintain_copy_artifact",
+                    "arguments": _copy_args("upsert_many", [_CANDIDATE_ARGS]),
+                },
+                {
+                    "id": "c2",
+                    "name": "maintain_copy_artifact",
+                    "arguments": _copy_args("save"),
                 }
             ],
             finish_reason="tool_calls",
@@ -126,9 +131,9 @@ def test_dag_runner_injects_real_skill_prose_not_placeholder(tmp_path):
     provider = _CapturingProvider()
     runtime = WorkflowRuntime(provider=provider, output_dir=tmp_path)
     node = NodeSpec(
-        id="factor_discovery",
-        skill_name="discover-personalization-factors",
-        output_model=FactorDiscoveryArtifact,
+        id="personalized_copy_generation",
+        skill_name="personalized-copy-generation",
+        output_model=PersonalizedCopyGenerationArtifact,
         max_attempts=1,
     )
 
@@ -144,7 +149,7 @@ def test_dag_runner_injects_real_skill_prose_not_placeholder(tmp_path):
     # System message MUST be the real SKILL.md prose (or a near-match
     # allowing minor whitespace/normalisation noise — the truth from plan
     # must_haves is "len(content) >= SKILL_bytes - 50").
-    expected = load_skill_prose("discover-personalization-factors")
+    expected = load_skill_prose("personalized-copy-generation")
     raw_bytes = len(expected.encode("utf-8"))
     assert len(seen.encode("utf-8")) >= raw_bytes - 50, (
         f"system message too short ({len(seen.encode('utf-8'))} bytes) — "
@@ -158,34 +163,47 @@ def test_dag_runner_injects_real_skill_prose_not_placeholder(tmp_path):
 
 
 def test_dag_runner_dispatches_each_node_its_own_skill_prose(tmp_path):
-    """Three nodes, three different SKILL.md texts injected as system msg."""
-    # factor_discovery — has its own real SKILL prose
+    """Merged generation node gets its active SKILL.md text injected."""
     provider = _CapturingProvider()
     runtime = WorkflowRuntime(provider=provider, output_dir=tmp_path)
     runtime._run_node(
         node=NodeSpec(
-            id="factor_discovery",
-            skill_name="discover-personalization-factors",
-            output_model=FactorDiscoveryArtifact,
+            id="personalized_copy_generation",
+            skill_name="personalized-copy-generation",
+            output_model=PersonalizedCopyGenerationArtifact,
             max_attempts=1,
         ),
         scenario=_SCENARIO,
     )
-    factor_prose = provider.skill_prose_seen[-1]
+    generation_prose = provider.skill_prose_seen[-1]
 
-    # Verbatim substring from each SKILL.md must appear in the prose seen by
-    # the provider for the matching node — a content check, not just a length
-    # check.
-    assert (
-        "discover-personalization-factors" in factor_prose
-        or "factor" in factor_prose.lower()
-    ), (
-        "factor_discovery system message must contain the bound SKILL prose"
-    )
+    assert "personalized-copy-generation" in generation_prose
+    assert "用户因子" in generation_prose
     # The full prose must equal the loader's output for the bound skill.
-    assert factor_prose == load_skill_prose(
-        "discover-personalization-factors"
+    assert generation_prose == load_skill_prose(
+        "personalized-copy-generation"
     )
+
+
+def test_dag_runner_attaches_validated_artifact_to_recording_log(tmp_path):
+    """Evidence flush must see the final merged artifact, not the last tool call."""
+    from seers_harness.validation.recording_provider import RecordingProvider
+
+    request_log: list[dict[str, Any]] = []
+    provider = RecordingProvider(_CapturingProvider(), request_log)
+    runtime = WorkflowRuntime(provider=provider, output_dir=tmp_path)
+
+    runtime._run_node(
+        node=NodeSpec(
+            id="personalized_copy_generation",
+            skill_name="personalized-copy-generation",
+            output_model=PersonalizedCopyGenerationArtifact,
+            max_attempts=1,
+        ),
+        scenario=_SCENARIO,
+    )
+
+    assert request_log[-1]["final_artifact"] == {"candidates": [_CANDIDATE_ARGS]}
 
 
 # -- Behavior 3: _distill_after_stage1 uses the same primitive --------------
@@ -252,9 +270,9 @@ def test_dag_runner_system_message_length_meets_real_llm_evidence_floor(
     runtime = WorkflowRuntime(provider=provider, output_dir=tmp_path)
     runtime._run_node(
         node=NodeSpec(
-            id="factor_discovery",
-            skill_name="discover-personalization-factors",
-            output_model=FactorDiscoveryArtifact,
+            id="personalized_copy_generation",
+            skill_name="personalized-copy-generation",
+            output_model=PersonalizedCopyGenerationArtifact,
             max_attempts=1,
         ),
         scenario=_SCENARIO,

@@ -19,13 +19,12 @@ def test_generation_skill_preserves_merged_path_and_linkage_contract() -> None:
     text = _skill_text()
 
     for expected in [
-        "default merged generation path",
-        "merged generation path",
-        "source_factor_id",
-        "factor state",
-        "copy state",
-        "plural distinct user-product tensions",
-        "source_factor_id is necessary but not sufficient",
+        "user_factors",
+        "source_user_factor_id",
+        "product_binding",
+        "fact_binding",
+        "maintain_copy_artifact",
+        "用户因子",
     ]:
         assert expected in text
 
@@ -34,11 +33,11 @@ def test_generation_skill_names_phase09_repair_red_flags() -> None:
     text = _skill_text()
 
     for expected in [
-        "single-angle collapse",
-        "duplicate factors",
-        "copy-before-factor",
-        "role or label renamed as factor",
-        "product-grounded scene result",
+        "避免重复商品名",
+        "动态事实",
+        "痛点前置",
+        "场景代入",
+        "商品承接",
     ]:
         assert expected in text
 

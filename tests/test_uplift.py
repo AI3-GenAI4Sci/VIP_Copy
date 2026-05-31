@@ -22,11 +22,11 @@ def _artifact(*totals: int) -> PersonalizedCopyRubricArtifact:
             scores.append(score)
             remaining -= score
         axis_scores = [
-            _axis("factor_alignment", scores[0]),
-            _axis("personalized_distinction", scores[1]),
-            _axis("slogan_quality", scores[2]),
-            _axis("product_relevance", scores[3]),
-            _axis("naturalness", scores[4]),
+            _axis("user_factor_grounding", scores[0]),
+            _axis("product_binding", scores[1]),
+            _axis("personalized_conversion", scores[2]),
+            _axis("commercial_sharpness", scores[3]),
+            _axis("expression_boundary", scores[4]),
         ]
         judgments.append(
             PersonalizedCopyRubricJudgment(
@@ -34,7 +34,7 @@ def _artifact(*totals: int) -> PersonalizedCopyRubricArtifact:
                 candidate_index=index,
                 product_id=f"p{index}",
                 copy_text="copy",
-                factor_id=f"f{index}",
+                user_factor_id=f"uf{index}",
                 axis_scores=axis_scores,
                 total_score=total,
                 decision="hold",

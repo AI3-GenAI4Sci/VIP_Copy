@@ -32,7 +32,7 @@ routed into ``manual_review_queue`` instead.
 manual_review_queue selection rule (D-13, D-12, D-10) — the union of:
 
     (a) rows where ``VAL-03_pass is None`` AND
-        ``len_claim_text > 0`` (there is prose to
+        ``len_need_or_pain_text > 0`` (there is prose to
         judge per D-13);
     (b) rows where ``reflow_triggered`` is True (D-12 reflow event
         surfaces a case worth reading);
@@ -139,7 +139,7 @@ def write_batch_summary(
         needs_review = False
         # (a) VAL-03 prose-judgement trigger: text present but no verdict
         if row.get("VAL-03_pass") is None:
-            text_len = row.get("len_claim_text", 0)
+            text_len = row.get("len_need_or_pain_text", 0)
             if isinstance(text_len, int) and text_len > 0:
                 needs_review = True
         # (b) D-12 reflow attribution

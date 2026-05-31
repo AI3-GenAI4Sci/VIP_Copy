@@ -50,18 +50,18 @@ _SKILL_ROOTS: tuple[Path, ...] = (
 )
 
 
-# Static binding from DAG node id to skill name. The four entries are the four
-# nodes that currently dispatch through ``run_skill_via_tools``:
-#   - ``factor_discovery`` / ``copy_generation`` / ``personalized_copy_rubric``
-#     are the production 3-node DAG.
+# Static binding from DAG node id to skill name. Production generation now
+# dispatches through the merged 2-node DAG:
+#   - ``personalized_copy_generation`` is the active generation surface.
+#   - ``personalized_copy_rubric`` is the downstream judge surface.
 #   - ``distill_after_stage1`` is the evolution distill node invoked from
 #     ``validation/runner.py``.
 #
 # Adding a new DAG node = add one row here. **Never** inline a parallel mapping
 # at the call site; that violates the D2 single-extension-point invariant.
 NODE_SKILL_BINDING: dict[str, str] = {
-    "factor_discovery": "discover-personalization-factors",
-    "copy_generation": "generate-copy-candidates",
+    "personalized_user_mining": "personalized-user-mining",
+    "personalized_copy_generation": "personalized-copy-generation",
     "personalized_copy_rubric": "personalized-copy-rubric-judge",
     "distill_after_stage1": "distill-skill-deltas",
 }

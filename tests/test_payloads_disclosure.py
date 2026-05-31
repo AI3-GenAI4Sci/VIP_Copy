@@ -7,12 +7,13 @@ from seers_harness.workflow.payloads import (
     copy_payload_for,
     provider_payload_for_node,
     rubric_payload_for,
+    user_personalization_payload_for,
 )
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 ANALYSIS_PATH = PROJECT_ROOT / "seers_harness/workflow/CONTEXT_DISCLOSURE_ANALYSIS.md"
-SKILL_PATH = PROJECT_ROOT / "workflow-skills/current/generate-copy-candidates/SKILL.md"
+SKILL_PATH = PROJECT_ROOT / "workflow-skills/current/personalized-copy-generation/SKILL.md"
 
 SUMMARY_PROFILE_KEYS = ["gender", "age", "city_level", "vip_level", "is_svip"]
 SUMMARY_CONTEXT_KEYS = ["device_type", "hour"]
@@ -101,8 +102,27 @@ def _scenario() -> dict:
             },
         },
         "products": [
-            {"product_id": "P-1", "group_key": "维生素", "canonical_product_name": "叶酸片"},
-            {"product_id": "P-2", "group_key": "护肤", "canonical_product_name": "面霜"},
+            {
+                "product_id": "P-1",
+                "group_key": "维生素",
+                "canonical_product_name": "叶酸片",
+                "attributes": {
+                    "item_name": "叶酸片",
+                    "item_arriv_price": 39.9,
+                    "click_timestamp_list_topN": list(range(100)),
+                    "title_attr_size": "0,0,0,0,0,0,0,0,0,0",
+                },
+            },
+            {
+                "product_id": "P-2",
+                "group_key": "护肤",
+                "canonical_product_name": "面霜",
+                "attributes": {
+                    "item_name": "面霜",
+                    "item_arriv_price": 99.0,
+                    "click_timestamp_list_topN": list(range(100)),
+                },
+            },
         ],
         "metadata": {
             "derived_features_by_product": {
@@ -125,13 +145,17 @@ def _scenario() -> dict:
     }
 
 
-def _factors_artifact() -> dict:
+def _user_artifact() -> dict:
     return {
-        "factors": [
+        "user_factors": [
             {
-                "factor_id": "F-1",
-                "transferable_disposition": "更信任熟悉品牌的稳妥选择",
-                "evidence_refs": [{"value": "品牌A"}],
+                "user_factor_id": "UF-1",
+                "signal_basis": "近期反复浏览熟悉品牌的基础营养品",
+                "need_or_pain": "更信任熟悉品牌带来的低风险选择感",
+                "scene_trigger": "早餐后补充营养",
+                "buying_heuristic": "偏好省心、顺手、日常可坚持",
+                "expression_hooks": ["熟悉品牌", "低风险", "日常坚持"],
+                "evidence_refs": [{"path": "user_state_signals.behavior_top_lists.prefer_brand_topK", "value": None}],
             }
         ]
     }
@@ -143,15 +167,11 @@ def _copy_artifact() -> dict:
             {
                 "candidate_id": "C-1",
                 "product_id": "P-1",
-                "source_factor_id": "F-1",
-                "text": "熟悉那一口，今天也稳",
-                "group_key": "维生素",
-                "bridge_logic": {
-                    "product_anchor": "熟悉",
-                    "relation_anchor": "稳",
-                },
-                "used_copyable_hooks": ["熟悉品牌"],
-                "intended_effect": "把熟悉感变成低风险的选择理由",
+                "source_user_factor_id": "UF-1",
+                "text": "熟悉补充更安心",
+                "commercial_angle": "品牌信任",
+                "product_binding": "叶酸片承接基础营养补充诉求",
+                "fact_binding": "商品类目和品牌关系稳定",
             }
         ]
     }
@@ -159,85 +179,102 @@ def _copy_artifact() -> dict:
 
 def test_context_disclosure_analysis_has_signed_boundary():
     text = ANALYSIS_PATH.read_text(encoding="utf-8")
-
     assert re.search(r"^Sign-off:\s*\d{4}-\d{2}-\d{2}", text, re.MULTILINE)
 
 
-def test_copy_payload_discloses_only_signed_field_groups_in_fixed_order():
-    payload = copy_payload_for(scenario=_scenario(), factors_artifact=_factors_artifact())
+def test_user_personalization_payload_discloses_only_user_side_field_groups():
+    payload = user_personalization_payload_for(_scenario())
 
+    assert payload["schema_version"] == "request_user_personalization_payload_v1"
     assert list(payload["user_state_summary"]["profile"]) == SUMMARY_PROFILE_KEYS
     assert list(payload["user_state_summary"]["context"]) == SUMMARY_CONTEXT_KEYS
     assert list(payload["user_state_signals"]["profile_counts"]) == PROFILE_COUNT_KEYS
     assert list(payload["user_state_signals"]["behavior_top_lists"]) == BEHAVIOR_TOP_LIST_KEYS
     assert list(payload["user_state_signals"]["target_product_derived"]["P-1"]) == TARGET_PRODUCT_DERIVED_KEYS
-    assert list(payload["user_state_signals"]["target_product_derived"]["P-2"]) == TARGET_PRODUCT_DERIVED_KEYS
 
-    assert payload["user_state_signals"]["profile_counts"]["purchase_price_avg_30d"] == 42.33
-    assert payload["user_state_signals"]["profile_counts"]["fav_price_avg_30d"] == 108.13
-    assert payload["user_state_signals"]["target_product_derived"]["P-1"]["price_vs_user_baseline_ratio"] == 0.88
-
-    serialized = repr(payload["user_state_summary"]) + repr(payload["user_state_signals"])
+    serialized = repr(payload)
     for excluded in (
         "private-user",
         "region_level",
         "day_of_week",
         "click_goods_id_list_topN",
-        "collect_cat3_id_list_topN",
-        "click_cat3_id_list_topN",
+        "collect_cat3_id_topN",
         "click_timestamp_list_topN",
+        "title_attr_size",
     ):
         assert excluded not in serialized
 
 
-def test_rubric_payload_receives_factors_user_signals_and_candidate_bridge_logic():
+def test_copy_payload_receives_user_factors_and_product_context_without_behavior_lists():
+    payload = copy_payload_for(scenario=_scenario(), user_artifact=_user_artifact())
+
+    assert payload["schema_version"] == "request_personalized_copy_generation_payload_v1"
+    assert payload["user_factors"] == _user_artifact()["user_factors"]
+    assert payload["target_products"][0]["product_id"] == "P-1"
+    assert payload["derived_features_by_product"]["P-1"]["price_vs_user_baseline_ratio"] == 0.88
+    assert "user_state_signals" not in payload
+    assert "profile_counts" not in repr(payload)
+
+
+def test_rubric_payload_receives_user_factors_candidates_and_product_context():
     payload = rubric_payload_for(
         scenario=_scenario(),
         copy_artifact=_copy_artifact(),
-        factors_artifact=_factors_artifact(),
+        user_artifact=_user_artifact(),
     )
 
-    assert payload["factors"] == _factors_artifact()["factors"]
-    assert payload["user_state_summary"]["profile"]["gender"] == "女"
-    assert payload["user_state_signals"]["behavior_top_lists"]["prefer_cat3_topK"] == "保健食品,维生素"
-    assert payload["candidates"][0]["bridge_logic"] == {
-        "product_anchor": "熟悉",
-        "relation_anchor": "稳",
-    }
-    assert payload["candidates"][0]["used_copyable_hooks"] == ["熟悉品牌"]
-    assert payload["candidates"][0]["intended_effect"] == "把熟悉感变成低风险的选择理由"
+    assert payload["schema_version"] == "request_personalized_copy_rubric_payload_v1"
+    assert payload["user_factors"] == _user_artifact()["user_factors"]
+    assert payload["candidates"][0]["copy_text"] == "熟悉补充更安心"
+    assert payload["candidates"][0]["user_factor_id"] == "UF-1"
+    assert payload["candidates"][0]["product_binding"] == "叶酸片承接基础营养补充诉求"
 
 
-def test_skill_hook_rule_allows_signed_payload_fields_without_user_history_literals():
+def test_skill_generation_doc_names_new_copy_artifact_without_old_factor_schema():
     text = SKILL_PATH.read_text(encoding="utf-8")
 
-    assert "Hook words come only from" not in text
-    assert "Hook anchors may be drawn" in text
-    assert "user_state_summary" in text
-    assert "user_state_signals" in text
-    assert "target_products" in text
-    assert "derived_features_by_product" in text
+    for expected in [
+        "user_factors",
+        "source_user_factor_id",
+        "commercial_angle",
+        "product_binding",
+        "fact_binding",
+        "maintain_copy_artifact",
+    ]:
+        assert expected in text
+    for forbidden in [
+        "maintain_factor_artifact",
+        "source_factor_id",
+        "signal_pattern",
+        "product_fit",
+        "manifestation",
+    ]:
+        assert forbidden not in text
     assert not FORBIDDEN_SKILL_PATTERN.search(text)
 
 
-def test_provider_payload_dispatches_rubric_with_factor_and_copy_artifacts():
-    payload = provider_payload_for_node(
+def test_provider_payload_dispatches_three_split_nodes():
+    user_payload = provider_payload_for_node(
+        node_id="personalized_user_mining",
+        scenario=_scenario(),
+        session_id="session-1",
+    )
+    copy_payload = provider_payload_for_node(
+        node_id="personalized_copy_generation",
+        scenario=_scenario(),
+        dependency_payloads={"personalized_user_mining": _user_artifact()},
+        session_id="session-2",
+    )
+    rubric_payload = provider_payload_for_node(
         node_id="personalized_copy_rubric",
         scenario=_scenario(),
         dependency_payloads={
-            "factor_discovery": _factors_artifact(),
-            "copy_generation": _copy_artifact(),
+            "personalized_user_mining": _user_artifact(),
+            "personalized_copy_generation": _copy_artifact(),
         },
-        session_id="session-1",
+        session_id="session-3",
     )
 
-    assert payload["session_id"] == "session-1"
-    assert payload["scenario"]["factors"] == _factors_artifact()["factors"]
-    assert payload["scenario"]["candidates"][0]["bridge_logic"]["relation_anchor"] == "稳"
-
-
-def test_rubric_payload_keeps_copy_artifact_only_call_backward_compatible():
-    payload = rubric_payload_for(scenario=_scenario(), copy_artifact=_copy_artifact())
-
-    assert payload["factors"] == []
-    assert payload["candidates"][0]["candidate_id"] == "C-1"
+    assert user_payload["session_id"] == "session-1"
+    assert copy_payload["scenario"]["user_factors"] == _user_artifact()["user_factors"]
+    assert rubric_payload["scenario"]["candidates"][0]["copy_text"] == "熟悉补充更安心"

@@ -47,7 +47,7 @@ def _reset_cache():
 
 
 def test_load_skill_prose_returns_full_skill_md_for_current_skill():
-    prose = load_skill_prose("discover-personalization-factors")
+    prose = load_skill_prose("personalized-copy-generation")
     # Must be the real SKILL.md — far longer than the 10-byte placeholder.
     assert len(prose) > 1500, (
         "expected real SKILL.md prose (>1500 bytes), got "
@@ -59,7 +59,7 @@ def test_load_skill_prose_returns_full_skill_md_for_current_skill():
         repo_root
         / "workflow-skills"
         / "current"
-        / "discover-personalization-factors"
+        / "personalized-copy-generation"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert prose == direct
@@ -113,14 +113,14 @@ def test_load_skill_prose_caches_after_first_read(monkeypatch):
     monkeypatch.setattr(Path, "read_text", counting_read_text)
 
     # First call — reads disk once.
-    first = load_skill_prose("generate-copy-candidates")
+    first = load_skill_prose("personalized-copy-generation")
     assert call_count["n"] == 1, (
         f"expected 1 disk read after first call, got {call_count['n']}"
     )
 
     # 100 more calls — cache must satisfy all of them.
     for _ in range(100):
-        again = load_skill_prose("generate-copy-candidates")
+        again = load_skill_prose("personalized-copy-generation")
         assert again == first
     assert call_count["n"] == 1, (
         "cache miss: expected exactly 1 disk read for 101 calls, "
@@ -133,28 +133,35 @@ def test_load_skill_prose_caches_after_first_read(monkeypatch):
 
 def test_resolve_skill_for_node_canonical_bindings():
     assert (
-        resolve_skill_for_node("factor_discovery")
-        == "discover-personalization-factors"
-    )
-    assert (
-        resolve_skill_for_node("copy_generation")
-        == "generate-copy-candidates"
-    )
-    assert (
         resolve_skill_for_node("personalized_copy_rubric")
         == "personalized-copy-rubric-judge"
+    )
+    assert (
+        resolve_skill_for_node("personalized_copy_generation")
+        == "personalized-copy-generation"
     )
     assert (
         resolve_skill_for_node("distill_after_stage1")
         == "distill-skill-deltas"
     )
-    # Exactly the four documented bindings are exposed.
+    # Exactly the documented bindings are exposed.
     assert set(NODE_SKILL_BINDING.keys()) == {
-        "factor_discovery",
-        "copy_generation",
+        "personalized_user_mining",
+        "personalized_copy_generation",
         "personalized_copy_rubric",
         "distill_after_stage1",
     }
+
+
+def test_current_generation_skill_prose_describes_merged_surface():
+    merged_prose = load_skill_prose("personalized-copy-generation")
+
+    assert "maintain_copy_artifact" in merged_prose
+    assert "user_factors" in merged_prose
+    assert "source_user_factor_id" in merged_prose
+    assert "product_binding" in merged_prose
+    assert "fact_binding" in merged_prose
+    assert "商品名" in merged_prose
 
 
 def test_resolve_skill_for_node_unknown_raises_keyerror():
