@@ -494,6 +494,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
     """Assemble the Stage 1 trace payload handed to distill-skill-deltas."""
     node_ids = (
+        "personalized_user_mining",
         "personalized_copy_generation",
         "personalized_copy_rubric",
     )
@@ -510,6 +511,7 @@ def _build_trajectory_payload(stage1_request_dir: Path) -> dict:
 
     return {
         "request_id": stage1_request_dir.name,
+        "personalized_user_mining": artifacts["personalized_user_mining"],
         "personalized_copy_generation": artifacts["personalized_copy_generation"],
         "personalized_copy_rubric": artifacts["personalized_copy_rubric"],
         "tool_calls_per_node": tool_calls_per_node,
@@ -647,12 +649,13 @@ def _target_skill_matches_surface(target_skill: str, surfaces: Sequence[str]) ->
     return False
 
 
-def _target_skill_for_nodes(nodes: Sequence[Any]) -> str | None:
+def _target_skills_for_nodes(nodes: Sequence[Any]) -> list[str] | None:
+    targets: list[str] = []
     for node in nodes:
         skill_name = getattr(node, "skill_name", None)
         if isinstance(skill_name, str) and skill_name:
-            return f"current/{skill_name}/SKILL.md"
-    return None
+            targets.append(f"current/{skill_name}/SKILL.md")
+    return targets or None
 
 
 def _record_host_baseline_outcome(record: dict[str, Any], runtime: WorkflowRuntime) -> None:
@@ -722,6 +725,18 @@ def _exploration_decision_event(decision: ExplorationDecision) -> dict[str, Any]
             "posterior_samples",
         )
     }
+
+
+def _rubric_has_hold(rubric_artifact: dict[str, Any] | None) -> bool:
+    if not isinstance(rubric_artifact, dict):
+        return False
+    judgments = rubric_artifact.get("judgments")
+    if not isinstance(judgments, list):
+        return False
+    return any(
+        isinstance(judgment, dict) and judgment.get("decision") == "hold"
+        for judgment in judgments
+    )
 
 
 def _run_one_request(
@@ -844,7 +859,10 @@ def _run_one_request(
         decision = select_trial_delta(
             portfolio=delta_portfolio,
             applicable_surface=applicable_surface,
-            target_skill=_target_skill_for_nodes(nodes),
+            target_skills=_target_skills_for_nodes(nodes),
+            blocked_reason=(
+                None if _rubric_has_hold(rubric_artifact) else "no_hold_judgment"
+            ),
             rng=_trial_rng,
         )
         events.append(_exploration_decision_event(decision))

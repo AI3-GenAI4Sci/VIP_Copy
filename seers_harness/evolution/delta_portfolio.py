@@ -27,7 +27,7 @@ import json
 import math
 import random as _random_module
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -53,6 +53,7 @@ durably to ``workflow-skills/current/`` — ``ready_for_review`` is bookkeeping.
 
 NoTrialReason = Literal[
     "no_eligible_delta",
+    "no_hold_judgment",
     "all_eligible_deltas_evidence_sufficient",
     "all_eligible_deltas_non_experimental",
     "target_unresolvable",
@@ -69,6 +70,15 @@ EVIDENCE_SUFFICIENT_SAMPLES = 10
 DECISION_BOUNDARY_MEAN = 0.5
 NEAR_BOUNDARY_MARGIN = 0.15
 LOWER_BOUND_CONFIDENCE_MIN = 0.55
+ACTIVE_PORTFOLIO_TARGETS: frozenset[str] = frozenset(
+    {
+        "current/personalized-user-mining/SKILL.md",
+        "current/personalized-copy-generation/SKILL.md",
+    }
+)
+"""Production skill targets that may enter the active trial portfolio."""
+
+MAX_CLUSTER_EVIDENCE_REFS = 8
 
 
 class ExplorationDecision(BaseModel):
@@ -275,6 +285,15 @@ def _surface_matches(row: DeltaPortfolioRow, applicable_surface: list[str]) -> b
     )
 
 
+def _target_matches(
+    row: DeltaPortfolioRow,
+    target_skills: Sequence[str] | None,
+) -> bool:
+    if target_skills is None:
+        return True
+    return row.target_skill in set(target_skills)
+
+
 def _wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
     if total <= 0:
         return 0.0
@@ -307,10 +326,9 @@ def select_trial_delta(
     portfolio: list[DeltaPortfolioRow],
     *,
     applicable_surface: list[str],
-    target_skill: str | None = None,
+    target_skills: Sequence[str] | None = None,
     blocked_reason: NoTrialReason | None = None,
     rng: _random_module.Random | None = None,
-    **_: object,
 ) -> ExplorationDecision:
     """Return an explicit exploration decision for one request.
 
@@ -335,7 +353,7 @@ def select_trial_delta(
         row
         for row in portfolio
         if _surface_matches(row, applicable_surface)
-        and (target_skill is None or row.target_skill == target_skill)
+        and _target_matches(row, target_skills)
     ]
     if not applicable_rows:
         return ExplorationDecision(
@@ -494,9 +512,12 @@ def assemble_portfolio(
     """Return the post-evolution portfolio assembled from existing rows + new proposals.
 
     Pure transform: ``existing_portfolio`` passes through unchanged, then any
-    ``DeltaProposal`` whose ``delta_id`` is not already in the portfolio is
-    converted into a fresh ``DeltaPortfolioRow`` (seed bandit prior; zero
-    sample counts). The function never mutates either input list.
+    ``DeltaProposal`` whose ``delta_id`` is not already in the portfolio and
+    whose target is active-trial eligible is converted into a fresh
+    ``DeltaPortfolioRow`` (seed bandit prior; zero sample counts). Related
+    experimental rows are then deterministically clustered and distilled into
+    one representative row so the portfolio does not accumulate pudding-style
+    prompt patches. The function never mutates either input list.
 
     When ``events`` is ``None``, no side effects occur — this is the byte-
     identical default required by D-11's "no business-logic change" rule
@@ -514,6 +535,8 @@ def assemble_portfolio(
     for proposal in new_proposals:
         if proposal.delta_id in existing_ids:
             continue
+        if proposal.target_skill not in ACTIVE_PORTFOLIO_TARGETS:
+            continue
         assembled.append(
             DeltaPortfolioRow(
                 delta_id=proposal.delta_id,
@@ -528,6 +551,7 @@ def assemble_portfolio(
             )
         )
         existing_ids.add(proposal.delta_id)
+    assembled = distill_delta_clusters(assembled)
 
     if events is not None:
         before_ids = [row.delta_id for row in existing_portfolio]
@@ -542,6 +566,102 @@ def assemble_portfolio(
         )
 
     return assembled
+
+
+def distill_delta_clusters(
+    portfolio: list[DeltaPortfolioRow],
+) -> list[DeltaPortfolioRow]:
+    """Merge same-mechanism experimental deltas into compact representatives.
+
+    Clustering is intentionally deterministic and based only on the structured
+    mechanism identity: target skill, function id, and operation. Free-text
+    labels such as failure types and applicable surfaces are merged as
+    descriptive metadata, but they do not decide cluster membership.
+    Non-experimental rows are preserved as-is so rejected/held evidence is not
+    resurrected by a fresh proposal.
+    """
+    output: list[DeltaPortfolioRow] = []
+    clusters: list[list[DeltaPortfolioRow]] = []
+
+    for row in portfolio:
+        if row.status != "experimental":
+            output.append(row)
+            continue
+        for cluster in clusters:
+            if _same_delta_cluster(cluster[0], row):
+                cluster.append(row)
+                break
+        else:
+            clusters.append([row])
+
+    output.extend(_distill_delta_cluster(cluster) for cluster in clusters)
+    return output
+
+
+def _same_delta_cluster(a: DeltaPortfolioRow, b: DeltaPortfolioRow) -> bool:
+    return (
+        a.target_skill == b.target_skill
+        and a.function_id == b.function_id
+        and a.operation == b.operation
+    )
+
+
+def _distill_delta_cluster(rows: list[DeltaPortfolioRow]) -> DeltaPortfolioRow:
+    if len(rows) == 1:
+        return rows[0]
+    representative = rows[0]
+    merged_evidence_refs: list[EvidenceRef] = []
+    seen_evidence: set[tuple[str, str]] = set()
+    for row in rows:
+        for ref in row.evidence_refs:
+            key = (ref.path, json.dumps(ref.value, sort_keys=True, default=str))
+            if key in seen_evidence:
+                continue
+            seen_evidence.add(key)
+            merged_evidence_refs.append(ref)
+            if len(merged_evidence_refs) >= MAX_CLUSTER_EVIDENCE_REFS:
+                break
+        if len(merged_evidence_refs) >= MAX_CLUSTER_EVIDENCE_REFS:
+            break
+
+    source_ids = [row.delta_id for row in rows]
+    merged_observation = (
+        f"Clustered from {len(rows)} related proposals "
+        f"({', '.join(source_ids)}). Representative observation: "
+        f"{representative.observation}"
+    )
+    merged_change = (
+        f"Distilled representative change for "
+        f"{representative.target_skill}:{representative.function_id}. "
+        f"{representative.proposed_change}"
+    )
+    return representative.model_copy(
+        update={
+            "observation": merged_observation,
+            "proposed_change": merged_change,
+            "evidence_refs": merged_evidence_refs,
+            "applicable_surface": _ordered_union(row.applicable_surface for row in rows),
+            "failure_types": _ordered_union(row.failure_types for row in rows),
+            "belief_alpha": 1.0 + sum(row.belief_alpha - 1.0 for row in rows),
+            "belief_beta": 1.0 + sum(row.belief_beta - 1.0 for row in rows),
+            "sample_count": sum(row.sample_count for row in rows),
+            "success_count": sum(row.success_count for row in rows),
+            "failure_count": sum(row.failure_count for row in rows),
+            "token_cost_delta_sum": sum(row.token_cost_delta_sum for row in rows),
+        }
+    )
+
+
+def _ordered_union(groups: Iterable[Iterable[str]]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        for value in group:
+            if value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def sediment_trajectories(
