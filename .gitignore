@@ -14,6 +14,7 @@ data_100k.csv
 .runs/
 .cache/
 *.jsonl
+.claude/scheduled_tasks.lock
 
 # Local development tests are not synchronized to GitHub.
 tests/
