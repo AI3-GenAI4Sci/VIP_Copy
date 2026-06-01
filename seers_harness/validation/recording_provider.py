@@ -36,9 +36,9 @@ without threading the id through every call.
 from __future__ import annotations
 
 import contextvars
-import copy
-from dataclasses import asdict, is_dataclass
 from typing import Any
+
+from seers_harness.provider_runtime.capture import build_capture_record
 
 # ContextVar so the stage runner (07-04) can stamp records with the
 # current node_id without threading the id through every call. The
@@ -120,13 +120,6 @@ class RecordingProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> Any:
-        # Deep-copy the request messages BEFORE the inner call. The
-        # tool_loop mutates ``messages`` after the call returns
-        # (appending the assistant turn + tool results), so a shallow
-        # copy would let those later mutations bleed into our snapshot
-        # of the *outgoing* request shape.
-        captured_messages = copy.deepcopy(messages)
-
         # NO try/except here (D-08): exceptions propagate unchanged so
         # the stage runner can fail-fast (D-02) on schema/protocol
         # errors and route transient/rate-limit errors per D-19.
@@ -137,74 +130,18 @@ class RecordingProvider:
             tools=tools,
         )
 
-        # Build the captured record. ``response`` is a JSON-friendly
-        # dict (raw_tool_calls SDK objects are dropped because the
-        # parsed form ``result.tool_calls`` already carries the data).
-        response_dict = _result_to_dict(result)
-
-        # Pull tool_calls in the parsed shape the inner provider returns
-        # ({"id", "name", "arguments"}). Empty list when none.
-        tool_calls = list(getattr(result, "tool_calls", []) or [])
-
-        # last_usage snapshot. The inner provider populates
-        # ``last_usage`` (prompt_tokens, completion_tokens,
-        # total_tokens) on every call. We attach ``model`` from the
-        # inner provider attribute when the SDK did not echo it back so
-        # the per-node ``usage.json`` always carries the model name.
-        usage = dict(getattr(self.inner, "last_usage", {}) or {})
-        if "model" not in usage:
-            inner_model = getattr(self.inner, "model", None)
-            if inner_model is not None:
-                usage["model"] = inner_model
-
         # Resolve node_id: prefer the kwarg the harness passes; fall
         # back to the contextvar so stage runners that drive the
         # provider through wrapper code without the kwarg still get
         # stamped records.
         resolved_node_id = node_id if node_id is not None else _current_node_id.get()
 
-        record: dict[str, Any] = {
-            "node_id": resolved_node_id,
-            "messages": captured_messages,
-            "response": response_dict,
-            "tool_calls": tool_calls,
-            "last_usage": usage,
-            # ``final_artifact`` is intentionally None here. The
-            # evidence_writer falls back to the last tool_call
-            # arguments / last assistant message when None — the
-            # stage runner may also set it explicitly after the
-            # tool_loop returns (when the artifact path on disk has
-            # been validated).
-            "final_artifact": None,
-        }
-        self.request_log.append(record)
+        self.request_log.append(
+            build_capture_record(
+                inner=self.inner,
+                result=result,
+                node_id=resolved_node_id,
+                messages=messages,
+            )
+        )
         return result
-
-
-def _result_to_dict(result: Any) -> dict[str, Any]:
-    """Best-effort serialize a ``ProviderResult`` into a JSON-friendly dict.
-
-    Drops ``raw_tool_calls`` (SDK objects, not JSON-serializable). All
-    other fields on ``ProviderResult`` are plain Python types or simple
-    containers. Falls back to per-attribute extraction if a non-
-    dataclass duck-typed object slips through.
-    """
-    if is_dataclass(result):
-        d = asdict(result)
-        d.pop("raw_tool_calls", None)
-        return d
-    keys = (
-        "payload",
-        "usage",
-        "tool_calls",
-        "finish_reason",
-        "reasoning_content",
-        "raw_messages",
-        "raw_response_text",
-        "model",
-    )
-    out: dict[str, Any] = {}
-    for k in keys:
-        if hasattr(result, k):
-            out[k] = getattr(result, k)
-    return out

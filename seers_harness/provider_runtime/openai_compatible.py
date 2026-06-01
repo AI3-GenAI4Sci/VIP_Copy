@@ -25,6 +25,7 @@ from seers_harness.core.errors import (
     classify_exception,
 )
 from seers_harness.provider_runtime.base import ProviderResult
+from seers_harness.workflow.progress import render_cli_event, write_cli_line
 
 DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
 _DEFAULT_TIMEOUT_SECONDS = 180
@@ -91,10 +92,14 @@ class OpenAICompatibleProvider:
                 ]
             except ProviderResponseError as exc:
                 last_parse = exc
-                print(
-                    f"[provider] parse_retry node={node_id} "
-                    f"attempt={_attempt + 1}/{_parse_max_retries() + 1}",
-                    file=sys.stderr,
+                write_cli_line(
+                    sys.stderr,
+                    render_cli_event(
+                        "provider",
+                        "parse_retry",
+                        node=node_id,
+                        attempt=f"{_attempt + 1}/{_parse_max_retries() + 1}",
+                    ),
                 )
                 continue
             return ProviderResult(

@@ -57,6 +57,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from seers_harness.validation.request_evidence import NodeEvidence, normalize_request_log
+
 
 def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
     """Write per-node evidence files for every record in ``request_log``.
@@ -67,39 +69,30 @@ def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
     base = Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
 
-    grouped: dict[str, list[tuple[int, dict]]] = {}
-    for index, record in enumerate(request_log):
-        fallback = f"req_{index:04d}"
-        node_id = _sanitise_node_id(record.get("node_id"), fallback)
-        grouped.setdefault(node_id, []).append((index, record))
-
-    for node_id, indexed_records in grouped.items():
+    for evidence in normalize_request_log(request_log):
         try:
-            _flush_many(indexed_records, base, node_id)
+            _flush_node(evidence, base)
         except Exception:
             # Best-effort post-mortem (D-22b): print to stderr and
             # continue. The stage runner already failed-fast at request
             # level (D-02), so a write failure here must not eclipse
             # the genuine evidence on disk.
-            first_record = indexed_records[0][1] if indexed_records else {}
+            first_record = evidence.records[0] if evidence.records else {}
             sys.stderr.write(
                 f"[evidence_writer] failed to flush record "
-                f"index={indexed_records[0][0] if indexed_records else '<none>'} "
+                f"index=<grouped> "
                 f"node_id={_safe_str(first_record, 'node_id')}\n"
             )
             traceback.print_exc(file=sys.stderr)
 
 
 def _flush_one(record: dict, base: Path, index: int) -> None:
-    fallback = f"req_{index:04d}"
-    node_id = _sanitise_node_id(record.get("node_id"), fallback)
-    _flush_many([(index, record)], base, node_id)
+    evidence = normalize_request_log([record])[0]
+    _flush_node(evidence, base)
 
 
-def _flush_many(indexed_records: list[tuple[int, dict]], base: Path, node_id: str) -> None:
-    records = [record for _index, record in indexed_records]
-
-    node_dir = base / node_id
+def _flush_node(evidence: NodeEvidence, base: Path) -> None:
+    node_dir = base / evidence.node_id
     # Defence-in-depth (CR-04): even after _sanitise_node_id, refuse
     # any resolved path that escapes ``base``. commonpath raises
     # ValueError for cross-volume paths on Windows; treat that as a
@@ -107,119 +100,27 @@ def _flush_many(indexed_records: list[tuple[int, dict]], base: Path, node_id: st
     try:
         common = os.path.commonpath([node_dir.resolve(), base.resolve()])
     except ValueError:
-        raise ValueError(f"node_id escaped out_dir: {record.get('node_id')!r}")
+        raise ValueError(f"node_id escaped out_dir: {evidence.node_id!r}")
     if common != str(base.resolve()):
-        raise ValueError(f"node_id escaped out_dir: {record.get('node_id')!r}")
+        raise ValueError(f"node_id escaped out_dir: {evidence.node_id!r}")
 
     node_dir.mkdir(parents=True, exist_ok=True)
 
     # messages.jsonl — one line per request message
-    messages: list[Any] = []
-    for record in records:
-        messages.extend(record.get("messages") or [])
-    _write_jsonl(node_dir / "messages.jsonl", messages)
+    _write_jsonl(node_dir / "messages.jsonl", evidence.messages)
 
     # tool_calls.jsonl — one line per observed tool_call. Empty file
     # when the response had no tool_calls (the auditor expects the file
     # to exist regardless so the per-node layout is uniform).
-    tool_calls: list[Any] = []
-    for record in records:
-        tool_calls.extend(record.get("tool_calls") or [])
-    _write_jsonl(node_dir / "tool_calls.jsonl", tool_calls)
+    _write_jsonl(node_dir / "tool_calls.jsonl", evidence.tool_calls)
 
     # artifact.json — final structured output, with fallback
-    artifact = _resolve_artifact(records[-1] if records else {})
-    _write_json(node_dir / "artifact.json", artifact)
+    _write_json(node_dir / "artifact.json", evidence.artifact)
 
     # usage_turns.jsonl + usage.json — preserve per-turn evidence while
     # keeping the legacy aggregate file path downstream readers already use.
-    usage_turns = [
-        usage
-        for record in records
-        if isinstance((usage := record.get("last_usage") or {}), dict)
-    ]
-    _write_jsonl(node_dir / "usage_turns.jsonl", usage_turns)
-    _write_json(node_dir / "usage.json", _aggregate_usage(usage_turns))
-
-
-def _aggregate_usage(turns: list[dict[str, Any]]) -> dict[str, Any]:
-    if not turns:
-        return {}
-    aggregate: dict[str, Any] = {"turn_count": len(turns)}
-    numeric_keys = sorted(
-        {
-            key
-            for turn in turns
-            for key, value in turn.items()
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        }
-    )
-    for key in numeric_keys:
-        aggregate[key] = sum(
-            turn.get(key, 0)
-            for turn in turns
-            if isinstance(turn.get(key), (int, float))
-            and not isinstance(turn.get(key), bool)
-        )
-    model = turns[-1].get("model")
-    if model is not None:
-        aggregate["model"] = model
-    aggregate["first"] = turns[0]
-    aggregate["last"] = turns[-1]
-    return aggregate
-
-
-def _sanitise_node_id(raw: Any, fallback: str) -> str:
-    """Return a filesystem-safe directory name for ``raw``.
-
-    Strips ``/``, ``\\``, ``:``, leading dots so ``..`` cannot be used
-    to escape the parent directory; falls back to ``fallback`` for
-    empty / non-str / single- or double-dot inputs. The caller MUST
-    additionally check ``commonpath`` after resolution as
-    defence-in-depth — see CR-04 in 07-REVIEW.md.
-    """
-    if not isinstance(raw, str) or not raw:
-        return fallback
-    cleaned = raw.replace("/", "_").replace("\\", "_").replace(":", "_")
-    cleaned = cleaned.lstrip(".")
-    if not cleaned or cleaned in {".", ".."}:
-        return fallback
-    return cleaned
-
-
-def _resolve_artifact(record: dict) -> Any:
-    """Best-effort artifact extraction.
-
-    Order:
-      1. Explicit ``record["final_artifact"]`` if non-None.
-      2. Last tool_call's already-parsed ``arguments`` dict (the proxy
-         pre-parsed JSON via the inner provider's ``_parse_args``).
-      3. ``raw_response_text`` parsed as JSON if it is a JSON string.
-      4. The raw response dict so the auditor still has *something*.
-    """
-    final = record.get("final_artifact")
-    if final is not None:
-        return final
-
-    tool_calls = record.get("tool_calls") or []
-    if tool_calls:
-        last_call = tool_calls[-1]
-        if isinstance(last_call, dict):
-            args = last_call.get("arguments")
-            if isinstance(args, dict):
-                return args
-
-    response = record.get("response") or {}
-    if isinstance(response, dict):
-        raw_text = response.get("raw_response_text")
-        if isinstance(raw_text, str) and raw_text.strip():
-            try:
-                return json.loads(raw_text)
-            except json.JSONDecodeError:
-                pass
-        return response
-
-    return {}
+    _write_jsonl(node_dir / "usage_turns.jsonl", evidence.usage_turns)
+    _write_json(node_dir / "usage.json", evidence.usage)
 
 
 def _write_jsonl(path: Path, rows: list) -> None:

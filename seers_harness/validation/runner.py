@@ -123,6 +123,7 @@ import os
 import random
 import sys
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -155,10 +156,6 @@ from seers_harness.evolution.trial_runner import (
     sha256_of_text,
 )
 from seers_harness.evolution.uplift import compute_uplift
-from seers_harness.intake.request_preprocessor import (
-    detect_delimiter,
-    preprocess_request_from_csv,
-)
 from seers_harness.workflow.dag_runner import WorkflowRuntime
 from seers_harness.validation._secrets import safe_exc
 from seers_harness.validation.evidence_writer import flush_evidence
@@ -181,9 +178,19 @@ from seers_harness.validation.offline_export import (
     admitted_copy_rows,
     write_offline_copy_assets,
 )
-from seers_harness.validation.recording_provider import (
-    RecordingProvider,
-    set_current_node_id,
+from seers_harness.validation.recording_provider import RecordingProvider, set_current_node_id
+from seers_harness.validation.scenario_source import (
+    DEFAULT_NUM_REQUESTS,
+    ScenarioLoader,
+    build_scratch_csv as _build_scratch_csv,
+    default_request_ids,
+    default_scenario_loader,
+)
+from seers_harness.validation.stage_dashboard import BatchDashboard
+from seers_harness.workflow.progress import (
+    CliReporter,
+    render_cli_event,
+    write_cli_line,
 )
 
 
@@ -221,7 +228,31 @@ _trial_rng = _make_trial_rng()
 
 _DEFAULT_RUNS_ROOT = Path("tests/smoke/.runs")
 LIVE_SKILL_ROOT: Path = Path(__file__).resolve().parents[2] / "workflow-skills"
-_DEFAULT_NUM_REQUESTS = 20
+_DEFAULT_NUM_REQUESTS = DEFAULT_NUM_REQUESTS
+
+
+def _cli_event(scope: str, message: str = "", **fields: Any) -> None:
+    write_cli_line(sys.stderr, render_cli_event(scope, message, **fields))
+
+
+def _cli_line(line: str) -> None:
+    write_cli_line(sys.stderr, line)
+
+
+def _make_workflow_runtime(
+    *,
+    provider: Any,
+    output_dir: Path,
+    cli: CliReporter | None = None,
+) -> WorkflowRuntime:
+    if cli is None:
+        return WorkflowRuntime(provider=provider, output_dir=output_dir)
+    try:
+        return WorkflowRuntime(provider=provider, output_dir=output_dir, cli=cli)
+    except TypeError as exc:
+        if "cli" not in str(exc):
+            raise
+        return WorkflowRuntime(provider=provider, output_dir=output_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +268,6 @@ to avoid real network calls. A fresh provider per thread is the
 harness-concurrency contract from the Phase 6
 ``test_concurrency_smoke``.
 """
-
-
-ScenarioLoader = Callable[[str], dict[str, Any]]
-"""Callable mapping ``request_id`` -> scenario dict. The default loader
-reads from ``data_100k.csv`` via ``preprocess_request_from_csv``;
-tests inject a synthetic loader."""
 
 
 NodesFactory = Callable[[], Sequence[Any]]
@@ -305,98 +330,6 @@ def _default_deepseek_factory() -> Any:
 _RUNNER_PROVIDER_MAX_RETRIES: int = 3  # D-03 budget
 
 
-def _default_scenario_loader(
-    csv: Path | None = None,
-    num_requests: int | None = None,
-) -> ScenarioLoader:
-    """Default scenario loader — reads from ``data_100k.csv``.
-
-    Returns a closure over a one-pass scratch CSV containing the first
-    ``num_requests`` unique ``request_id``s, mirroring the smoke pattern
-    (test_e2e_smoke.py L43-L98). The scratch CSV lives in a temp
-    directory that is cleaned up implicitly when the process exits.
-
-    Both ``csv`` and ``num_requests`` are CLI overrides (``--csv``
-    / ``--num-requests``); when ``None`` the defaults are
-    ``data_100k.csv`` and ``_DEFAULT_NUM_REQUESTS`` respectively.
-    """
-    # Imported lazily so the runner does not pay the smoke-import cost
-    # in unit tests that inject a fake scenario_loader.
-    import tempfile
-    import csv as _csv
-
-    csv_path = (
-        Path(csv).resolve()
-        if csv is not None
-        else Path(__file__).resolve().parents[2] / "data_100k.csv"
-    )
-    if not csv_path.exists():
-        raise RuntimeError(
-            f"data_100k.csv not present at {csv_path}; supply --csv or "
-            "inject a scenario_loader for tests"
-        )
-
-    limit = num_requests if num_requests is not None else _DEFAULT_NUM_REQUESTS
-
-    scratch_dir = Path(tempfile.mkdtemp(prefix="seers-runner-"))
-    scratch_csv = scratch_dir / "scratch.csv"
-    _build_scratch_csv(csv_path, scratch_csv, limit)
-
-    def loader(request_id: str) -> dict[str, Any]:
-        return preprocess_request_from_csv(scratch_csv, request_id=request_id)
-
-    return loader
-
-
-def _build_scratch_csv(csv_path: Path, scratch_path: Path, limit: int) -> list[str]:
-    """One-pass scan of the first ~1000 rows of ``csv_path`` capturing the
-    first ``limit`` unique request_ids (mirrors test_e2e_smoke.py)."""
-    import csv as _csv
-
-    delimiter = detect_delimiter(csv_path)
-    seen: set[str] = set()
-    chosen_order: list[str] = []
-    captured_lines: list[str] = []
-    header_scan_limit = 1000
-
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        header_line = f.readline()
-        if not header_line:
-            raise RuntimeError("empty CSV")
-        header = next(_csv.reader([header_line], delimiter=delimiter))
-        try:
-            request_id_idx = header.index("request_id")
-        except ValueError as exc:
-            raise RuntimeError(
-                f"data_100k.csv missing 'request_id' column; header={header[:5]}..."
-            ) from exc
-
-        for _row_no in range(header_scan_limit):
-            line = f.readline()
-            if not line:
-                break
-            parsed = next(_csv.reader([line], delimiter=delimiter), None)
-            if parsed is None or request_id_idx >= len(parsed):
-                continue
-            rid = parsed[request_id_idx].strip()
-            if not rid:
-                continue
-            if rid in seen:
-                if rid in chosen_order:
-                    captured_lines.append(line)
-                continue
-            if len(chosen_order) >= limit:
-                continue
-            seen.add(rid)
-            chosen_order.append(rid)
-            captured_lines.append(line)
-
-    scratch_path.write_text(
-        header_line + "".join(captured_lines), encoding="utf-8"
-    )
-    return chosen_order
-
-
 def _default_nodes_factory() -> NodesFactory:
     """Default nodes factory — reuses ``tests.smoke.scripted_full_chain.make_nodes``.
 
@@ -411,28 +344,6 @@ def _default_nodes_factory() -> NodesFactory:
     from tests.smoke.scripted_full_chain import make_nodes
 
     return make_nodes
-
-
-def _default_request_ids_provider(
-    csv: Path | None = None,
-    num_requests: int | None = None,
-) -> list[str]:
-    """Default request-id list — first ``num_requests`` unique ids
-    from ``csv`` (defaults: ``data_100k.csv``, ``_DEFAULT_NUM_REQUESTS``)."""
-    import tempfile
-    csv_path = (
-        Path(csv).resolve()
-        if csv is not None
-        else Path(__file__).resolve().parents[2] / "data_100k.csv"
-    )
-    if not csv_path.exists():
-        raise RuntimeError(
-            f"data_100k.csv not present at {csv_path}; pass request_ids explicitly"
-        )
-    limit = num_requests if num_requests is not None else _DEFAULT_NUM_REQUESTS
-    scratch_dir = Path(tempfile.mkdtemp(prefix="seers-runner-ids-"))
-    scratch_csv = scratch_dir / "scratch.csv"
-    return _build_scratch_csv(csv_path, scratch_csv, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -544,10 +455,7 @@ def _distill_after_stage1(
     )
 
     distill_provider = RecordingProvider(provider_factory(), [])
-    print(
-        f"[runner] distill_after_stage1: starting agent, stage1_request_id={rid}",
-        file=sys.stderr,
-    )
+    _cli_event("runner", "distill_start", stage1_request_id=rid)
     result = run_skill_via_tools(
         skill_name="distill-skill-deltas",
         skill_bundle=skill_bundle,
@@ -563,16 +471,17 @@ def _distill_after_stage1(
             stage1_request_dir / "distill_evidence",
         )
     except Exception as cleanup_exc:
-        print(
-            f"[runner] distill_evidence flush failed: {safe_exc(cleanup_exc)}",
-            file=sys.stderr,
+        _cli_event(
+            "runner",
+            "distill_evidence flush failed",
+            error=safe_exc(cleanup_exc),
         )
     artifact = DeltaDistillationArtifact.model_validate(result.artifact)
-    print(
-        "[runner] distill_after_stage1: "
-        f"produced {len(artifact.deltas)} proposals "
-        f"(delta_ids={[p.delta_id for p in artifact.deltas]})",
-        file=sys.stderr,
+    _cli_event(
+        "runner",
+        "distill_done",
+        proposals=len(artifact.deltas),
+        delta_ids=",".join(p.delta_id for p in artifact.deltas),
     )
     return assemble_portfolio(current_portfolio, artifact.deltas, events=None)
 
@@ -581,20 +490,22 @@ def _patch_from_portfolio_row(
     row: DeltaPortfolioRow, live_skill_root: Path
 ) -> SkillDeltaPatch | None:
     if row.operation != "modify":
-        print(
-            "[runner] trial_skipped "
-            f"delta_id={row.delta_id} "
-            f"reason=non_modify_operation operation={row.operation}",
-            file=sys.stderr,
+        _cli_event(
+            "runner",
+            "trial_skipped",
+            delta_id=row.delta_id,
+            reason="non_modify_operation",
+            operation=row.operation,
         )
         return None
     live_target = live_skill_root / row.target_skill
     if not live_target.exists():
-        print(
-            "[runner] trial_skipped "
-            f"delta_id={row.delta_id} "
-            f"reason=target_unresolvable target_skill={row.target_skill}",
-            file=sys.stderr,
+        _cli_event(
+            "runner",
+            "trial_skipped",
+            delta_id=row.delta_id,
+            reason="target_unresolvable",
+            target_skill=row.target_skill,
         )
         return None
     live_text = live_target.read_text(encoding="utf-8")
@@ -751,6 +662,7 @@ def _run_one_request(
     live_skill_root: Path,
     journal_path: Path | None = None,
     max_concurrent: int = 20,
+    cli: CliReporter | None = None,
 ) -> dict[str, Any]:
     """Drive ONE request end-to-end through the harness chain.
 
@@ -776,7 +688,11 @@ def _run_one_request(
 
     request_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = request_dir / "_artifacts"
-    runtime = WorkflowRuntime(provider=proxy, output_dir=artifacts_dir)
+    runtime = _make_workflow_runtime(
+        provider=proxy,
+        output_dir=artifacts_dir,
+        cli=cli,
+    )
 
     record: dict[str, Any] = {
         "node_id": _safe_request_dirname(request_id),
@@ -983,10 +899,10 @@ def _run_one_request(
         try:
             flush_evidence(request_log, evidence_dir)
         except Exception as cleanup_exc:
-            print(
-                f"[runner] flush_evidence failed for {request_id}: "
-                f"{safe_exc(cleanup_exc)}",
-                file=sys.stderr,
+            _cli_event(
+                "runner",
+                f"flush_evidence failed for {request_id}",
+                error=safe_exc(cleanup_exc),
             )
         # Flush the per-request VAL-06 evolution snapshot (always —
         # an empty events list still produces an empty-shape snapshot
@@ -995,10 +911,10 @@ def _run_one_request(
         try:
             write_evolution_snapshot(events, request_dir / "evolution_snapshot.json")
         except Exception as cleanup_exc:
-            print(
-                f"[runner] write_evolution_snapshot failed for {request_id}: "
-                f"{safe_exc(cleanup_exc)}",
-                file=sys.stderr,
+            _cli_event(
+                "runner",
+                f"write_evolution_snapshot failed for {request_id}",
+                error=safe_exc(cleanup_exc),
             )
 
     return record
@@ -1044,17 +960,38 @@ def _run_stage(
     stage_dir.mkdir(parents=True, exist_ok=True)
 
     started_at = _utc_now_iso()
+    started_monotonic = time.monotonic()
     records: list[dict[str, Any]] = []
     failure_exc: BaseException | None = None
     journal_path = out_dir / "portfolio_journal.jsonl"
     journal_entries_before = len(read_journal_entries(journal_path))
 
-    print(f"[runner] stage {stage}: n={n} concurrency={stage_concurrency}", file=sys.stderr)
+    dashboard = BatchDashboard(
+        total=n,
+        validation_stage=stage,
+        concurrency=stage_concurrency,
+        out_dir=stage_dir,
+        stream=sys.stderr,
+        max_running=5 if stage_concurrency >= 5 else 3,
+    )
+    chain_cli = dashboard
+
+    def _failure_event(request_id: str, exc: BaseException, *, action: str) -> None:
+        _cli_event(
+            "batch",
+            "error",
+            validation_stage=stage,
+            request_id=request_id,
+            class_=classify(exc),
+            action=action,
+            error=safe_exc(exc),
+        )
+
+    dashboard.start()
 
     if stage_concurrency == 1:
         # Serial path — Stage 1 (N=1) and Stage 2 (N=20).
-        for i, rid in enumerate(stage_request_ids):
-            print(f"[runner] stage {stage} req {i + 1}/{n}: {rid}", file=sys.stderr)
+        for rid in stage_request_ids:
             scenario = scenario_loader(rid)
             request_dir = stage_dir / _safe_request_dirname(rid)
             # Per-request evolution events list — D-18 portfolio starts
@@ -1073,8 +1010,10 @@ def _run_stage(
                     live_skill_root=live_skill_root,
                     journal_path=out_dir / "portfolio_journal.jsonl",
                     max_concurrent=stage_concurrency,
+                    cli=chain_cli,
                 )
                 records.append(record)
+                dashboard.complete_request(rid, record)
             except BaseException as exc:
                 # D-19 routing: trial_failure -> record + continue;
                 # provider_error / infra_error -> fail-fast at request
@@ -1095,20 +1034,20 @@ def _run_stage(
                     # trial_failed event in `events`. Host request
                     # continues per D-19.
                     records.append(fail_record)
-                    print(
-                        f"[runner] stage {stage} req {rid}: trial_failure recorded; continuing",
-                        file=sys.stderr,
+                    dashboard.complete_request(rid, fail_record)
+                    _cli_event(
+                        "batch",
+                        "trial_failure",
+                        validation_stage=stage,
+                        request_id=rid,
+                        action="continuing",
                     )
                     continue
                 # provider_error / infra_error -> stop the stage now.
                 records.append(fail_record)
                 failure_exc = exc
-                print(
-                    f"[runner] stage {stage} req {rid}: "
-                    f"{classify(exc)} -> fail-fast",
-                    file=sys.stderr,
-                )
-                traceback.print_exc(file=sys.stderr)
+                dashboard.fail_request(rid, exc)
+                _failure_event(rid, exc, action="fail-fast")
                 break
     else:
         # Concurrent path — Stage 3 (concurrency=20 one-shot, see
@@ -1131,14 +1070,18 @@ def _run_stage(
                     live_skill_root=live_skill_root,
                     journal_path=out_dir / "portfolio_journal.jsonl",
                     max_concurrent=stage_concurrency,
+                    cli=chain_cli,
                 ): rid
                 for rid in stage_request_ids
             }
+            processed_futures: set[Any] = set()
             for fut in as_completed(future_to_rid):
+                processed_futures.add(fut)
                 rid = future_to_rid[fut]
                 try:
                     record = fut.result()
                     records.append(record)
+                    dashboard.complete_request(rid, record)
                 except BaseException as exc:
                     fail_record = {
                         "node_id": _safe_request_dirname(rid),
@@ -1151,20 +1094,19 @@ def _run_stage(
                     }
                     if is_trial_failure(exc):
                         records.append(fail_record)
-                        print(
-                            f"[runner] stage {stage} req {rid}: "
-                            "trial_failure recorded; continuing",
-                            file=sys.stderr,
+                        dashboard.complete_request(rid, fail_record)
+                        _cli_event(
+                            "batch",
+                            "trial_failure",
+                            validation_stage=stage,
+                            request_id=rid,
+                            action="continuing",
                         )
                         continue
                     records.append(fail_record)
                     failure_exc = exc
-                    print(
-                        f"[runner] stage {stage} req {rid}: "
-                        f"{classify(exc)} -> fail-fast",
-                        file=sys.stderr,
-                    )
-                    traceback.print_exc(file=sys.stderr)
+                    dashboard.fail_request(rid, exc)
+                    _failure_event(rid, exc, action="fail-fast")
                     # WR-01: drain in-flight futures so disk artifacts
                     # and index.json agree on which requests ran.
                     # `future.cancel()` only cancels not-yet-started
@@ -1176,7 +1118,9 @@ def _run_stage(
                     # cause stays the canonical fail-fast trigger;
                     # drained failures get their own row routed
                     # through plan 08-03's 7-enum failure_class.
-                    remaining = [f for f in future_to_rid if not f.done()]
+                    remaining = [
+                        f for f in future_to_rid if f not in processed_futures
+                    ]
                     for f in remaining:
                         f.cancel()
                     for f in as_completed(remaining):
@@ -1192,18 +1136,19 @@ def _run_stage(
                         try:
                             record = f.result()
                             records.append(record)
+                            dashboard.complete_request(rid_drain, record)
                         except BaseException as drain_exc:
-                            records.append(
-                                {
-                                    "node_id": _safe_request_dirname(rid_drain),
-                                    "request_id": rid_drain,
-                                    "artifact": None,
-                                    "reflow_triggered": False,
-                                    "trial_selected_delta_id": None,
-                                    "exception": safe_exc(drain_exc),
-                                    "failure_class": failure_class(drain_exc),
-                                }
-                            )
+                            drain_record = {
+                                "node_id": _safe_request_dirname(rid_drain),
+                                "request_id": rid_drain,
+                                "artifact": None,
+                                "reflow_triggered": False,
+                                "trial_selected_delta_id": None,
+                                "exception": safe_exc(drain_exc),
+                                "failure_class": failure_class(drain_exc),
+                            }
+                            records.append(drain_record)
+                            dashboard.complete_request(rid_drain, drain_record)
                     break
 
     finished_at = _utc_now_iso()
@@ -1249,6 +1194,17 @@ def _run_stage(
     passed = (failure_exc is None) and (len(records) == n) and all(
         r.get("exception") is None for r in records
     )
+    _cli_event(
+        "batch",
+        "done",
+        validation_stage=stage,
+        status="PASSED" if passed else "FAILED",
+        completed=f"{len(records)}/{n}",
+        failures=sum(1 for row in records if row.get("exception") is not None),
+        duration=f"{time.monotonic() - started_monotonic:.1f}s",
+        out_dir=stage_dir,
+    )
+    dashboard.finish()
 
     return StageResult(
         stage=stage,
@@ -1288,10 +1244,7 @@ def _bootstrap_portfolio_from_current_trace(
     bootstrap_stage_dir = out_dir / "portfolio_bootstrap"
     request_dir = bootstrap_stage_dir / _safe_request_dirname(rid)
     events: list[dict] = []
-    print(
-        f"[runner] portfolio bootstrap: request_id={rid}",
-        file=sys.stderr,
-    )
+    _cli_event("runner", "portfolio_bootstrap_start", request_id=rid)
     record = _run_one_request(
         request_id=rid,
         scenario=scenario_loader(rid),
@@ -1368,7 +1321,7 @@ def run(
     batch_id = out_dir.name
 
     if scenario_loader is None:
-        scenario_loader = _default_scenario_loader(csv=csv, num_requests=num_requests)
+        scenario_loader = default_scenario_loader(csv=csv, num_requests=num_requests)
 
     if nodes_factory is None:
         nodes_factory = _default_nodes_factory()
@@ -1378,17 +1331,20 @@ def run(
         provider_factory = _default_deepseek_factory
 
     if request_ids is None:
-        request_ids = _default_request_ids_provider(csv=csv, num_requests=num_requests)
+        request_ids = default_request_ids(csv=csv, num_requests=num_requests)
 
     # Initialise the delta_portfolio EMPTY at process start (D-18).
     # Stage 1 runs without trials; after Stage 1 passes, distillation may
     # populate this list for Stage 2/3 trials.
     delta_portfolio: list[DeltaPortfolioRow] = []
 
-    print(
-        f"[runner] start batch_id={batch_id} stages={list(stages)} "
-        f"n_request_ids={len(request_ids)} out_dir={out_dir}",
-        file=sys.stderr,
+    _cli_event(
+        "runner",
+        "start",
+        batch_id=batch_id,
+        stages=",".join(str(stage) for stage in stages),
+        request_ids=len(request_ids),
+        out_dir=out_dir,
     )
 
     if 1 not in stages and any(stage in stages for stage in (2, 3)):
@@ -1400,10 +1356,7 @@ def run(
             out_dir=out_dir,
             live_skill_root=LIVE_SKILL_ROOT,
         )
-        print(
-            f"[runner] portfolio bootstrap: deltas={len(delta_portfolio)}",
-            file=sys.stderr,
-        )
+        _cli_event("runner", "portfolio_bootstrap_done", deltas=len(delta_portfolio))
 
     for stage in stages:
         if stage not in _STAGE_CONFIG:
@@ -1422,13 +1375,15 @@ def run(
             concurrency=concurrency,
         )
         if not result.passed:
-            print(
-                f"[runner] stage {stage} FAILED — stopping run "
-                f"(stages remaining not started)",
-                file=sys.stderr,
+            _cli_event(
+                "runner",
+                "stop",
+                status="FAILED",
+                stage=stage,
+                reason="stage_failed",
             )
             return 1
-        print(f"[runner] stage {stage} PASSED", file=sys.stderr)
+        _cli_event("runner", "stage_passed", stage=stage)
         if stage == 1:
             delta_portfolio = _distill_after_stage1(
                 stage1_result=result,
@@ -1436,7 +1391,7 @@ def run(
                 current_portfolio=delta_portfolio,
             )
 
-    print("[runner] all requested stages passed", file=sys.stderr)
+    _cli_event("runner", "done", status="PASSED")
     return 0
 
 
@@ -1513,8 +1468,8 @@ def main(argv: list[str] | None = None) -> int:
         count = _load_env_file(args.env_file)
         api_key = os.environ.get("DEEPSEEK_API_KEY")
         suffix = api_key[-4:] if api_key else "<unset>"
-        print(f"[runner] env-file: loaded {count} keys from {args.env_file}", file=sys.stderr)
-        print(f"[runner] env-file: DEEPSEEK_API_KEY suffix=****{suffix}", file=sys.stderr)
+        _cli_line(f"[runner] env-file: loaded {count} keys from {args.env_file}")
+        _cli_line(f"[runner] env-file: DEEPSEEK_API_KEY suffix=****{suffix}")
 
     stages: tuple[int, ...]
     if args.stage is None:

@@ -11,21 +11,18 @@ last_reasoning_content, usage}. See RESEARCH §4 + §8 for the table and pitfall
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from seers_harness.agentic.tool_loop import ToolLoopError, run_skill_via_tools
-from seers_harness.core.errors import (
-    BusinessOutputError,
-    SchemaValidationHarnessError,
-    classify_exception,
-)
+from seers_harness.core.errors import classify_exception
 from seers_harness.tools.skill_tools import TOOL_HANDLERS, TOOLS_SPEC
-from seers_harness.workflow.payloads import provider_payload_for_node
+from seers_harness.workflow.node_attempt import NodeAttemptConfig, run_node_attempt
+from seers_harness.workflow.progress import CliReporter
 from seers_harness.workflow.skill_loader import load_skill_prose
 
 
@@ -57,6 +54,7 @@ class WorkflowRuntime:
     provider: Any
     output_dir: Path
     skill_root: Path | None = None
+    cli: CliReporter | None = None
     trace: list[dict[str, Any]] = field(default_factory=list)
     records: list[dict[str, Any]] = field(default_factory=list)
 
@@ -69,8 +67,17 @@ class WorkflowRuntime:
     ) -> Path:
         deps = dependency_payloads or {}
         last_error: Exception | None = None
+        request_id = _request_id_from_scenario(scenario)
         for attempt in range(1, node.max_attempts + 1):
+            attempt_started = time.monotonic()
             session_id = f"{node.id}:attempt-{attempt}:{uuid.uuid4().hex[:8]}"
+            self._cli_event(
+                f"node {node.id}",
+                "start",
+                request_id=request_id,
+                skill=node.skill_name,
+                attempt=f"{attempt}/{node.max_attempts}",
+            )
             self.records.append(
                 {"node_id": node.id, "attempt": attempt, "session_id": session_id, "status": "RUNNING"}
             )
@@ -78,43 +85,38 @@ class WorkflowRuntime:
                 {"type": "provider_call", "node_id": node.id, "session_id": session_id, "attempt": attempt}
             )
             try:
-                base_payload = provider_payload_for_node(
-                    node_id=node.id, scenario=scenario,
-                    dependency_payloads=deps, session_id=session_id,
-                )
-                skill_bundle = (
-                    load_skill_prose(node.skill_name, skill_root=self.skill_root)
-                    if self.skill_root is not None
-                    else load_skill_prose(node.skill_name)
-                )
-                result = run_skill_via_tools(
-                    skill_name=node.skill_name,
-                    skill_bundle=skill_bundle,
-                    payload=base_payload.get("scenario") or base_payload,
-                    tools_spec=TOOLS_SPEC[node.skill_name],
-                    tool_handlers=TOOL_HANDLERS,
+                result = run_node_attempt(
+                    config=NodeAttemptConfig(
+                        node_id=node.id,
+                        skill_name=node.skill_name,
+                        output_model=node.output_model,
+                        attempt=attempt,
+                        session_id=session_id,
+                        output_dir=self.output_dir,
+                        skill_root=self.skill_root,
+                        tools_spec=TOOLS_SPEC,
+                        tool_handlers=TOOL_HANDLERS,
+                        skill_loader=load_skill_prose,
+                    ),
+                    scenario=scenario,
+                    dependency_payloads=deps,
                     provider=self.provider,
-                    node_id=node.id,
                 )
-                self.trace.append(
-                    {
-                        "type": "tool_loop_summary", "node_id": node.id, "session_id": session_id,
-                        "turns_used": result.turns_used,
-                        "tool_calls_made": result.tool_calls_made,
-                        "last_reasoning_content": result.last_reasoning_content,
-                        "usage": result.usage,
-                    }
-                )
-                try:
-                    parsed = node.output_model.model_validate(result.artifact)
-                except ValidationError as exc:
-                    raise SchemaValidationHarnessError(str(exc)) from exc
-                _assert_business_output(node_id=node.id, scenario=base_payload.get("scenario") or base_payload, artifact=parsed)
-                _attach_final_artifact(self.provider, node.id, parsed)
-                output_path = self._write_artifact(node, session_id, parsed)
-                self.records.append(
-                    {"node_id": node.id, "attempt": attempt, "session_id": session_id,
-                     "status": "SUCCEEDED", "output_path": str(output_path)}
+                self.trace.append(result.summary)
+                output_path = result.output_path
+                self.records.append(result.record)
+                self._cli_event(
+                    f"node {node.id}",
+                    "done",
+                    request_id=request_id,
+                    status="SUCCEEDED",
+                    skill=node.skill_name,
+                    attempt=f"{attempt}/{node.max_attempts}",
+                    turns=result.summary["turns_used"],
+                    tool_calls=result.summary["tool_calls_made"],
+                    tokens=_total_tokens(result.summary["usage"]),
+                    duration=f"{time.monotonic() - attempt_started:.1f}s",
+                    artifact=output_path.name,
                 )
                 return output_path
             except Exception as exc:
@@ -130,15 +132,21 @@ class WorkflowRuntime:
                      "error_category": info["category"], "retryable": info["retryable"],
                      "remaining_attempts": node.max_attempts - attempt}
                 )
+                self._cli_event(
+                    f"node {node.id}",
+                    "error",
+                    request_id=request_id,
+                    skill=node.skill_name,
+                    attempt=f"{attempt}/{node.max_attempts}",
+                    category=info["category"],
+                    retryable=info["retryable"],
+                    remaining_attempts=node.max_attempts - attempt,
+                    duration=f"{time.monotonic() - attempt_started:.1f}s",
+                    error=_short_error(exc),
+                )
                 if not info["retryable"]:
                     break
         raise RuntimeError(f"Node {node.id} failed after {node.max_attempts} attempts") from last_error
-
-    def _write_artifact(self, node: NodeSpec, session_id: str, parsed: BaseModel) -> Path:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.output_dir / f"{node.id}-{session_id}.json"
-        path.write_text(parsed.model_dump_json(indent=2), encoding="utf-8")
-        return path
 
     def run_request(
         self,
@@ -158,40 +166,68 @@ class WorkflowRuntime:
         """
         dependency_payloads: dict[str, dict[str, Any]] = {}
         output_paths: dict[str, Path] = {}
-        for node in nodes:
-            output_path = self._run_node(
-                node=node,
-                scenario=scenario,
-                dependency_payloads=dependency_payloads,
+        request_id = _request_id_from_scenario(scenario)
+        started = time.monotonic()
+        self._cli_event(
+            f"request {request_id}",
+            "start",
+            nodes=len(nodes),
+            output_dir=self.output_dir,
+        )
+        try:
+            for node in nodes:
+                output_path = self._run_node(
+                    node=node,
+                    scenario=scenario,
+                    dependency_payloads=dependency_payloads,
+                )
+                dependency_payloads[node.id] = json.loads(
+                    output_path.read_text(encoding="utf-8")
+                )
+                output_paths[node.id] = output_path
+        except Exception:
+            self._cli_event(
+                f"request {request_id}",
+                "done",
+                status="FAILED",
+                nodes=len(nodes),
+                artifacts=len(output_paths),
+                duration=f"{time.monotonic() - started:.1f}s",
             )
-            dependency_payloads[node.id] = json.loads(
-                output_path.read_text(encoding="utf-8")
-            )
-            output_paths[node.id] = output_path
+            raise
+        self._cli_event(
+            f"request {request_id}",
+            "done",
+            status="SUCCEEDED",
+            nodes=len(nodes),
+            artifacts=len(output_paths),
+            duration=f"{time.monotonic() - started:.1f}s",
+        )
         return output_paths
 
-
-def _attach_final_artifact(provider: Any, node_id: str, parsed: BaseModel) -> None:
-    """Attach the validated node artifact to the latest captured provider turn."""
-    request_log = getattr(provider, "request_log", None)
-    if not isinstance(request_log, list):
-        return
-    artifact = parsed.model_dump(mode="json")
-    for record in reversed(request_log):
-        if isinstance(record, dict) and record.get("node_id") == node_id:
-            record["final_artifact"] = artifact
-            return
+    def _cli_event(self, scope: str, message: str = "", **fields: Any) -> None:
+        if self.cli is not None:
+            self.cli.event(scope, message, **fields)
 
 
-def _assert_business_output(*, node_id: str, scenario: dict[str, Any], artifact: BaseModel) -> None:
-    if node_id != "personalized_copy_generation":
-        return
-    if not isinstance(scenario, dict):
-        return
-    if int(scenario.get("target_product_count") or 0) <= 0:
-        return
-    data = artifact.model_dump(mode="json")
-    if not data.get("candidates"):
-        raise BusinessOutputError(
-            "personalized_copy_generation produced zero candidates for a non-empty request"
-        )
+def _request_id_from_scenario(scenario: Any) -> str:
+    if isinstance(scenario, dict):
+        raw = scenario.get("request_id") or scenario.get("scenario_id")
+        if raw:
+            return str(raw)
+    return "request"
+
+
+def _total_tokens(usage: dict[str, Any]) -> int | str:
+    value = usage.get("total_tokens")
+    if value is None:
+        return "-"
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _short_error(exc: Exception) -> str:
+    text = repr(exc)
+    return text if len(text) <= 240 else text[:237] + "..."

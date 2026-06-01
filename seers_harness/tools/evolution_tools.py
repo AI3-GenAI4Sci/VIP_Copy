@@ -34,6 +34,7 @@ from seers_harness.evolution.delta_portfolio import (
     DeltaDistillationArtifact,
     DeltaProposal,
 )
+from seers_harness.tools.basic_tools import BASIC_TOOL_HANDLERS, BASIC_TOOLS_SPEC
 
 
 # --------------------------------------------------------------------------- #
@@ -413,6 +414,7 @@ EVOLUTION_TOOLS_SPEC: dict[str, list[dict]] = {
         RECORD_DELTA_OBSERVATION_SPEC,
         RECORD_DELTA_CHANGE_SPEC,
         SUBMIT_DELTA_DISTILLATION_FINAL_SPEC,
+        *BASIC_TOOLS_SPEC,
     ],
 }
 
@@ -421,6 +423,7 @@ EVOLUTION_TOOL_HANDLERS: dict[str, Callable[[dict, dict], str]] = {
     "record_delta_observation": record_delta_observation,
     "record_delta_change": record_delta_change,
     "submit_delta_distillation_final": submit_delta_distillation_final,
+    **BASIC_TOOL_HANDLERS,
 }
 
 
