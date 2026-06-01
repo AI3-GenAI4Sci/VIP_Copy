@@ -9,28 +9,28 @@ work. It keeps method, not old wording.
 - SKILL prose is a language-built function approximation: every sentence must
   preserve a transferable pattern.
 - Do not write internal examples, patch lists, static domain enumerations, or
-  numeric thresholds in SKILL prose.
+  unnecessary mechanical sequences in SKILL prose.
 - Real provider/data evidence beats in-context simulation for product claims.
 - Clean deletes beat compatibility residue.
 - Restate architecture-level intent before acting.
 
 ## Phase 4 Keep Map
 
-| Skill | Keep | Drop |
+| Skill Surface | Keep | Drop |
 |---|---|---|
-| discover-personalization-factors | transferable disposition; junior-analyst test; references advisory | 5-class anchor list; STOP-GATE prose; user narration |
-| generate-copy-candidates | user-history token ban; literal anchors; drafts as thinking trace | draft quotas; emotion/price/state static lists; explanation-phrase bans |
-| personalized-copy-rubric-judge | seven binary axes; critique before verdict; floor axes by name; demographic/surveillance handling; binary-not-scale rationale | JSON output blocks; self-check blocks; old D4 axis; numeric score framing |
+| personalized-copy-generation / factor phase | relation behind the signal; field responsibilities; factor separation; transferability; product fit | fixed door taxonomy; hook-first evidence dumps; submit-tool choreography |
+| personalized-copy-generation / copy phase | factor-to-interest-to-scene-result transformation; user-history token ban; product value in the visible result | draft quotas; bridge substring games; product-name repetition as relevance |
+| personalized-copy-rubric-judge | candidate-factor linkage; concise diagnostics; derived admit/hold/reject for export | seven binary floor framing; hidden hard gates outside the rubric; scoreless judgments |
 
 ## Candidate-Derived Method Rules
 
-- Discover relations, not renamed columns. A factor should leave a public hook
-  the copy node can use without seeing raw user state.
-- Transform factor to bridge to visible line; do not translate the factor noun
-  into merchant copy.
+- Discover relations, not renamed columns. A factor should explain a visible
+  signal pattern, claim, mechanism, manifestation, and product fit.
+- Transform factor to user interest or avoidance point, then to a scene result;
+  do not translate the factor noun into merchant copy.
 - Prefer fewer strong candidates over same-angle paraphrases.
-- Judge admission with candidate linkage and critique-before-verdict; do not let
-  export mechanics become the evaluator.
+- Judge with scored candidate linkage so evolution can compare score deltas,
+  failure tags, and admit/hold/reject movement.
 
 ## Writing Rules
 
@@ -39,8 +39,9 @@ work. It keeps method, not old wording.
 - Use placeholder tokens such as `<cat3>` and `<brand>` only when examples are
   necessary.
 - Do not duplicate fixed reflection questions in SKILL prose; handlers own them.
-- Name tool sequences explicitly: `record_*`, optional `reflect_*`,
-  `submit_*_final`.
+- Name tools by role, not ritual. Maintain tools own artifact state; reflection
+  tools create a reasoning turn; final submit tools are compatibility paths only
+  where the runtime still requires them.
 - Before finishing, audit every body sentence by asking: deleting this sentence
   loses which reusable pattern?
 

@@ -38,7 +38,18 @@ delta 不是文本润色，不是一次候选文案修补，也不是把整份 s
 
 ## 输入证据
 
-trajectory 是唯一证据来源。读取时关注：
+trajectory 是唯一证据来源。当前输入 payload 只包含这些结构化上下文：
+
+- `request_id`：当前被蒸馏的 request 标识。
+- `personalized_user_mining`：用户因子挖掘 artifact，包含 user factors、信号依据、需求/痛点、场景触发、购买启发和 evidence refs。
+- `personalized_copy_generation`：copy 生成 artifact，包含候选 copy、对应 factor、商品承接、事实承接和商业角度。
+- `personalized_copy_rubric`：rubric artifact，包含每条 copy 的分项评分、总分、admit/hold/reject 决策、强弱点和失败标签。
+- `tool_calls_per_node`：三个 production node 的工具调用记录，用于判断 validate/save/finalize 是否完成，以及工具参数是否结构化。
+- `usage_per_node`：三个 production node 的 token/turn usage，用于定位重复推理、无效循环或 artifact 冗余。
+
+当前输入不直接包含原始表格 payload、完整用户画像原文、完整商品列表原文、messages 全文或 private reasoning。若需要引用用户、商品或场景事实，只能引用上述 artifact 和 tool call 中已经结构化保存的字段。
+
+读取时关注：
 
 - 用户信号、商品事实和列表上下文。
 - factor 如何建立，是否抓住了可复用转化假设。
@@ -102,16 +113,14 @@ trajectory 是唯一证据来源。读取时关注：
 
 ## target_skill 格式
 
-`target_skill` 是相对 live skill root 的路径，格式必须为：
+`target_skill` 必须是允许自动试验的 production skill，且只能从以下两个值中选择：
 
 ```text
-current/<skill-slug>/SKILL.md
+current/personalized-user-mining/SKILL.md
+current/personalized-copy-generation/SKILL.md
 ```
 
-有效例子：
-
-- `current/personalized-copy-generation/SKILL.md`
-- `current/personalized-copy-rubric-judge/SKILL.md`
+不要输出 rubric、evolution、portfolio、trial runner 或其他工程代码作为 target。当前 evolution 只优化用户因子挖掘和 copy 生成两类生产 skill。
 
 旧的拆分 generation skills 是归档参考，不是 production target。Evolution skills 本身也不是 production request loop 的目标 skill。
 

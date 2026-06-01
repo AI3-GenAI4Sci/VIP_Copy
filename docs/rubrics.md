@@ -21,22 +21,49 @@ A copy candidate is admissible only when all are true:
 - It contributes a distinct visible move to the request/list group. A fluent
   paraphrase of another candidate is not a new candidate.
 
+## Personalized Copy Scoring Rubric
+
+Rubric judging scores each candidate on five 0-5 axes so evolution can compare
+quality movement, not only exported-row counts:
+
+- `factor_alignment` - the line targets the source factor's claim, mechanism,
+  and manifestation.
+- `personalized_distinction` - the line reveals a specific target interest or
+  avoidance point without exposing private history.
+- `slogan_quality` - the line reads like concise recommendation-card slogan
+  copy, not explanation or platform guidance.
+- `product_relevance` - product value is naturally present as a transformed
+  effect, form, risk, or outcome.
+- `naturalness` - the line sounds human, credible, and non-mechanical.
+
+`total_score` is the 0-25 sum. Derive decisions as follows: `admit` when
+`total_score >= 21` and no axis is `<= 2`; `hold` when `total_score` is `15-20`,
+or when total is at least `21` with any axis `<= 2`; `reject` when
+`total_score < 15` or any critical axis is `0`. Critical axes are
+`factor_alignment`, `slogan_quality`, and `product_relevance`.
+
+Diagnostics should record the main strength, main weakness, and compact failure
+tags so skill-evolution runs can attribute changes.
+
 ## Factor Rubric
 
-A factor is good when it expresses a transferable disposition:
+A factor is good when it is an insight card:
 
-- It explains why a type of user could care, not merely which historical token was
-  observed.
-- It bridges user context to product/list context without copying private history
-  into public release text.
+- It describes the visible signal pattern before making the personalization
+  claim.
+- It explains why a type of user could care through a claim and mechanism, not
+  merely which historical token was observed.
+- It states what kinds of messages the user may respond to or reject without
+  writing the slogan.
+- It gives product fit, not product-free psychology.
+- It bridges user context to product/list context without copying private
+  history into public release text.
 - It survives U2U / U2I retrieval: another user with similar intent can receive
   the resulting copy without seeing someone else's trace.
 - It is specific enough to guide copy generation, but not so specific that it
   becomes a hidden feature translation.
-- It carries enough concrete hook evidence for the copy node to write from
-  public factor/product signals without reopening raw user state.
-- Across a list, factors should not collapse onto one safe signal when multiple
-  independent user-product relations are visible.
+- Across a product, factors should not collapse onto the same claim or
+  manifestation when multiple independent tensions are visible.
 
 ## Admission And Export Rubric
 
@@ -45,16 +72,19 @@ An offline asset row is admissible only when all are true:
 - A candidate has a stable `candidate_index` in the request/list group.
 - If a rubric artifact exists, the candidate has a matching judgment.
 - The matching judgment is `admit`; `hold` is not export evidence.
-- Reports separate hard-check survivors, rubric admits, holds, rejects, and
-  exported rows.
-- Quality claims use request-level coverage, not exported-row count alone.
+- Reports separate hard-check survivors, rubric admits, holds, rejects, scored
+  totals, failure tags, and exported rows.
+- Quality claims use request-level coverage and score movement, not exported-row
+  count alone.
 
 ## Tool-Use Rubric
 
 A tool-use implementation is acceptable when all are true:
 
-- The provider exposes one tool path; JSON output is a `submit_*_final` tool call,
-  not a second provider mode.
+- The provider exposes one tool path; JSON output is maintained through tool
+  calls, not a second provider mode.
+- Maintain tools own artifact state. `submit_*_final` calls are compatibility
+  finalization paths where the active runtime still requires them.
 - Tool handlers are pure functions over arguments and state.
 - Tool responses do not contain quality verdicts, accumulated hidden judgment, or
   domain lexicons that should live in SKILL/rubric reasoning.
