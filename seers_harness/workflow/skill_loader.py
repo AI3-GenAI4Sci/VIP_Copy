@@ -76,25 +76,28 @@ _CACHE_LOCK: threading.Lock = threading.Lock()
 
 
 def load_skill_prose(skill_name: str, *, skill_root: Path | None = None) -> str:
-    """Return the full text of ``<root>/<skill_name>/SKILL.md``.
+    """Return the full text for ``skill_name`` from ``workflow-skills``.
 
     The first call for a given ``skill_name`` reads the file from disk; later
     calls return the cached text. Search order is ``_SKILL_ROOTS`` (current
     first, then evolution); the first existing path wins. Passing
-    ``skill_root`` bypasses the production roots and cache so isolated trial
-    workspaces read their patched SKILL.md text.
+    ``skill_root`` treats that path as an isolated ``workflow-skills`` root and
+    searches its ``current/`` then ``evolution/`` subtrees without using cache.
 
     On miss raises ``FileNotFoundError`` with a message that names the missing
     skill and the searched roots — there is no fallback placeholder string,
     by design (F-08-B prevention).
     """
     if skill_root is not None:
-        candidate = skill_root / skill_name / "SKILL.md"
-        if candidate.exists():
-            return candidate.read_text(encoding="utf-8")
+        override_roots = (skill_root / "current", skill_root / "evolution")
+        for root in override_roots:
+            candidate = root / skill_name / "SKILL.md"
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8")
         raise FileNotFoundError(
             f"SKILL.md not found for skill_name={skill_name!r}; "
-            f"searched override root: {skill_root}"
+            f"searched override roots: "
+            + ", ".join(str(root) for root in override_roots)
         )
 
     cached = _PROSE_CACHE.get(skill_name)

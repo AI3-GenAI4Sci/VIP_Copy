@@ -142,12 +142,13 @@ def apply_delta_patch_temporarily(
 def _complete_trial_skill_root(temp_root: Path) -> None:
     """Populate missing known skills so trial reads stay inside temp_root."""
     for skill_name in set(NODE_SKILL_BINDING.values()):
-        target = temp_root / skill_name
-        if target.exists():
-            continue
         for source_root in _DEFAULT_SKILL_ROOTS:
             source = source_root / skill_name
+            target = temp_root / source_root.name / skill_name
+            if target.exists():
+                break
             if source.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(source, target)
                 break
 
