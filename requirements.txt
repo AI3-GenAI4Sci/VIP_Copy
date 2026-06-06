@@ -1,0 +1,13 @@
+# VIP COPY runtime dependencies.
+#
+# Install with:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#   pip install -e .
+
+# pydantic: structured artifact models and JSON validation.
+pydantic>=2.7
+
+# openai: OpenAI-compatible client used for DeepSeek chat/streaming calls.
+openai>=1.40

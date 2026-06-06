@@ -1,88 +1,238 @@
 # VIP COPY
 
-VIP COPY 是一个面向电商推荐文案实验的生产级 harness。它把一次 `request_id`
-曝光请求中的合规商品整体打包处理，经过用户个性化挖掘、文案生成、rubric 打分、
-确定性校验、离线落表和 skill 进化链路，形成可审计、可断点续传、可逐步进化的实验系统。
+> 面向电商推荐场景的个性化文案生产、评估与自进化 harness。
 
-核心原则：
+VIP COPY 把一次曝光请求中的合规商品整体打包处理，让系统在同一个用户、同一次
+`request_id` 上完成用户画像挖掘、推荐文案生成、自动评分、离线落表和小流量进化验证。
 
-- 一个 `request_id` 就是一次曝光请求，也是请求级金标准 key。
-- 同一个请求里的多个合规商品属于同一个用户和同一次曝光上下文，必须一起进生产链路。
-- 生产节点只使用 JSON mode，不调用工具。
-- 进化节点只在懒触发时使用 delta 记录工具，patch 校验、试跑、posterior 更新和 promotion 都由 harness 确定性完成。
-- 每次 runner 拥有独立产物目录，除非显式指定 `--state-dir`，否则不会借用旧实验产物。
+它适合这些场景：
+
+- 🛒 给推荐列表里的多个商品批量生成个性化短文案
+- 📊 离线评估文案质量、失败原因和 token 消耗
+- 🧪 小流量验证新的 prompt/skill 改动是否真的提升效果
+- 🔁 在长周期生产任务中积累轨迹，让系统逐步改进
+- 🧾 产出可直接下游使用的离线表：`request_id,user_id,item_id,copy`
+
+---
+
+## 目录
+
+- [快速开始](#快速开始)
+- [VIP COPY 能做什么](#vip-copy-能做什么)
+- [系统流程](#系统流程)
+- [安装与环境](#安装与环境)
+- [启动脚本](#启动脚本)
+- [输入与输出](#输入与输出)
+- [验证样例](#验证样例)
+- [进化机制](#进化机制)
+- [断点续传与产物管理](#断点续传与产物管理)
+- [常用参数](#常用参数)
+- [项目结构](#项目结构)
+
+---
+
+## 快速开始
+
+```bash
+git clone https://github.com/AI3-GenAI4Sci/Copy_harness.git
+cd Copy_harness
+
+bash scripts/install.sh
+```
+
+创建 `.env.local`：
+
+```bash
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODEL=deepseek-v4-pro
+```
+
+跑一个 15 条 request / 3 并发的小批量：
+
+```bash
+bash scripts/run_quick.sh
+```
+
+跑一个 50 条 request / 10 并发的 canary：
+
+```bash
+bash scripts/run_canary.sh
+```
+
+中断后继续同一个产物目录：
+
+```bash
+bash scripts/resume.sh .runs/starter_small_20260606T120000Z
+```
+
+---
+
+## VIP COPY 能做什么
+
+| 能力 | 说明 | 用户拿到什么 |
+|---|---|---|
+| 请求级多商品处理 | 一个 `request_id` 是一次曝光请求，同请求内多个合规商品一起进入链路 | 保持用户上下文一致，避免逐商品割裂 |
+| 用户个性化挖掘 | 从用户历史、偏好、行为信号里提炼稳定文案因子 | 可解释的用户动机、场景、表达钩子 |
+| 推荐短文案生成 | 为合规商品生成候选推荐文案 | 多条短 copy，绑定商品事实和用户因子 |
+| 自动 rubric 评分 | LLM 只输出分数，harness 做确定性判断 | 可排序、可审查的文案质量信号 |
+| 离线落表 | 最终只输出业务需要的四列文案表 | `request_id,user_id,item_id,copy` |
+| 失败记录与重跑 | 失败 request 记录原因，主任务结束后可重试 | 不因局部失败阻塞整批任务 |
+| 懒触发进化 | 累积足够轨迹后才分析失败/hold 案例 | 避免每条都进化造成 token 浪费 |
+| 小流量 delta trial | 新 skill 改动先走 shadow/holdout 验证 | 只有证明正向后才可能 promotion |
+
+---
 
 ## 系统流程
 
-```text
-CSV request/list_group
-  -> personalized-user-mining
-  -> personalized-copy-generation
-  -> personalized-copy-rubric-judge
-  -> 确定性校验与证据导出
-  -> offline_copy_table 落表
-  -> 懒触发 skill delta distillation
-  -> 生产流量 holdout trial
-  -> delta posterior 更新与 promotion
+```mermaid
+flowchart LR
+    A["CSV / request_id 列表"] --> B["请求预处理\n同 request 打包合规商品"]
+    B --> C["用户个性化挖掘\npersonalized-user-mining"]
+    C --> D["文案生成\npersonalized-copy-generation"]
+    D --> E["Rubric 打分\npersonalized-copy-rubric-judge"]
+    E --> F["确定性校验\n字段/结构/业务约束"]
+    F --> G["离线落表\noffline_copy_table.csv/jsonl"]
+    F --> H["轨迹与证据\nindex / summary / evidence"]
+    H --> I{"累积到进化阈值?"}
+    I -- 否 --> J["继续生产"]
+    I -- 是 --> K["delta distillation\n生成 JSON edit"]
+    K --> L["patchability 校验\n临时 skill workspace"]
+    L --> M["小流量 trial\n和正式版本对照"]
+    M --> N["后验更新\nportfolio / journal"]
+    N --> O{"证据充分?"}
+    O -- 否 --> J
+    O -- 是 --> P["promotion\n写入正式 skill"]
 ```
 
-生产 DAG 包含三个节点：
+生产链路只有三个 LLM 节点：
 
-1. `personalized-user-mining`：从用户历史、行为和上下文中挖掘稳定个性化因子。
-2. `personalized-copy-generation`：把用户因子、商品事实和 request 列表语境转成候选文案。
-3. `personalized-copy-rubric-judge`：只输出结构化评分，harness 根据分数和确定性校验决定是否 admit/hold/reject。
+1. `personalized-user-mining`：提炼用户动机、场景、偏好和表达钩子。
+2. `personalized-copy-generation`：把用户因子和商品事实转成候选文案。
+3. `personalized-copy-rubric-judge`：只输出结构化分数。
 
-最终业务落表是离线文案表，而不是审计表：
+工程判断、重试、断点续传、delta 应用、trial 选择、后验更新和最终落表都由 harness
+确定性完成。
+
+---
+
+## 安装与环境
+
+### 运行要求
+
+| 类型 | 要求 |
+|---|---|
+| Python | 3.11+ |
+| LLM Provider | DeepSeek OpenAI-compatible API |
+| 运行依赖 | 见 `requirements.txt` |
+| 推荐系统 | macOS / Linux |
+
+手动安装：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+验证入口：
+
+```bash
+vip-copy --help
+python -m seers_harness.validation.runner --help
+```
+
+### `.env.local` 示例
+
+```bash
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_TIMEOUT_SECONDS=300
+DEEPSEEK_CALL_DEADLINE_SECONDS=300
+DEEPSEEK_MAX_INFLIGHT_CALLS=10
+```
+
+默认推理强度为 `xhigh`，默认单次调用 timeout 和 streaming deadline 均为 `300s`。
+
+---
+
+## 启动脚本
+
+脚本都在 `scripts/` 下，默认读取 `.env.local`。你可以用环境变量覆盖默认值。
+
+| 脚本 | 用途 | 默认规模 |
+|---|---|---|
+| `scripts/install.sh` | 创建 `.venv` 并安装依赖 | - |
+| `scripts/run_quick.sh` | 快速真实链路验证 | 15 request / 3 并发 |
+| `scripts/run_canary.sh` | 常用 canary 批量 | 50 request / 10 并发 |
+| `scripts/resume.sh` | 断点续传已有 `out_dir` | 从 manifest 尽量自动读取 |
+| `scripts/run_large_template.sh` | 大规模压测模板 | 1,000,000 request / 50 并发 |
+
+常见覆盖方式：
+
+```bash
+# 指定输出目录
+OUT_DIR=.runs/my_canary bash scripts/run_canary.sh
+
+# 临时提高 provider 并发
+MAX_INFLIGHT_CALLS=20 bash scripts/run_canary.sh
+
+# 只跑指定 request
+REQUEST_IDS="-6834635816105165003 -6834636343439087307" bash scripts/run_quick.sh
+
+# 共享长期进化状态
+STATE_DIR=.runs/vip_copy_evolution_state bash scripts/run_canary.sh
+```
+
+百万级模板带防误触保护，需要显式确认：
+
+```bash
+CONFIRM_LARGE=1 bash scripts/run_large_template.sh
+```
+
+---
+
+## 输入与输出
+
+### 输入
+
+默认从本地 `data_100k.csv` 读取请求数据。你也可以传入自定义 CSV：
+
+```bash
+vip-copy \
+  --env-file .env.local \
+  --csv path/to/data.csv \
+  --num-requests 50 \
+  --concurrency 10
+```
+
+关键约定：
+
+- `request_id` 是一次曝光请求的金标准 key。
+- 同一个 `request_id` 下的商品属于同一个用户和同一次曝光上下文。
+- 一个请求里可能有多个合规商品，合规商品会一起进入文案生成节点。
+- 同一个 `user_id` 的用户挖掘结果可被缓存复用。
+
+### 最终业务表
+
+最终离线表只保留业务需要的四列：
 
 ```text
 request_id,user_id,item_id,copy
 ```
 
-审计信息、评分、证据、轨迹和进化状态保存在 `index.json`、`batch_summary.json`、
-`evidence/`、`portfolio.jsonl` 和 `portfolio_journal.jsonl` 中，不混入最终离线表。
+示例：
 
-## 快速开始
+| request_id | user_id | item_id | copy |
+|---|---:|---:|---|
+| -6834635848893206135 | 140921217 | 6920832287677502793 | 含胸驼背改善体态 高口碑款 |
+| -6833791596394007611 | 222884073 | 6921304807236403737 | 度假约会必备！清新气息持久留香 |
+| -6834425217442237829 | 4698252 | 6921266932685931864 | 春季通勤不怕晒！敏感肌专属高倍防晒 |
+| -6834706508028200887 | 568296523 | 6920366473311795356 | 按压式高口碑，全家刷牙更方便 |
 
-默认跑一个小批量：
+### 运行产物
 
-```bash
-vip-copy \
-  --env-file .env.local
-```
-
-指定 15 条 request、3 并发、DeepSeek 超时 300 秒：
-
-```bash
-vip-copy \
-  --env-file .env.local \
-  --out-dir .runs/demo_15x3 \
-  --num-requests 15 \
-  --concurrency 3 \
-  --timeout 300 \
-  --call-deadline 300 \
-  --max-inflight-calls 3
-```
-
-断点续传：
-
-```bash
-vip-copy \
-  --env-file .env.local \
-  --out-dir .runs/demo_15x3 \
-  --resume
-```
-
-没有安装 console script 时，也可以使用模块方式：
-
-```bash
-.venv/bin/python -m seers_harness.validation.runner --env-file .env.local
-```
-
-如果不传 `--resume`，runner 会拒绝写入非空 `--out-dir`，防止新实验误借用旧请求产物。
-
-## 产物结构
-
-每次运行拥有一个独立目录：
+每次 runner 都拥有独立目录：
 
 ```text
 .runs/<run_id>/
@@ -104,207 +254,188 @@ vip-copy \
     └── evolution_snapshot.json
 ```
 
-关键文件：
+| 文件 | 用途 |
+|---|---|
+| `offline_copy_table.csv/jsonl` | 下游使用的离线文案表 |
+| `run_manifest.json` | 本次运行配置、request 列表、provider 参数 |
+| `completed_records.jsonl` | 断点续传依据 |
+| `index.json` | 请求级索引和校验结果 |
+| `batch_summary.json` | 批量通过率、失败类型、进化指标 |
+| `failed_requests.json` | 最终失败 request 与原因 |
+| `portfolio.jsonl` | 当前 delta portfolio 快照 |
+| `portfolio_journal.jsonl` | 本次 trial 后验更新记录 |
 
-- `offline_copy_table.csv` / `offline_copy_table.jsonl`：最终离线落表，只包含
-  `request_id,user_id,item_id,copy`。
-- `run_manifest.json`：记录本次运行的 request 列表、并发、provider 压力参数、进化策略、resume 状态和输出契约。
-- `completed_records.jsonl`：运行中追加写入，成功收尾时重写为最终记录；`--resume` 用它跳过已完成 slot。
-- `index.json`：请求级索引。trial 行会同时记录 holdout `request_id` 和被替换的 `original_request_id`。
-- `batch_summary.json`：批量结果摘要、失败统计、进化状态和极端样本入口。
-- `failed_requests.json`：最终未恢复失败请求及失败原因，用于后续重跑。
-- `portfolio.jsonl`：本次运行结束时的 delta portfolio 快照。
-- `portfolio_journal.jsonl`：本次运行新增的 posterior 更新 journal。
+---
 
-## 持久进化状态
+## 验证样例
 
-默认情况下：
+以下结果来自真实 DeepSeek 外发验证，用来说明系统功能和产物形态。
 
-```text
-state_dir == out_dir
+| 批次 | 规模 | 并发 | 状态 | 生产 records | trial records | 确定性校验 | 失败类别 | 离线 copy 行 |
+|---|---:|---:|---|---:|---:|---|---|---:|
+| 小批量链路验证 | 3 requests | 2 | PASSED | 3 | 0 | VAL-01/02/04 全通过 | ok=3 | 5 |
+| 生产 canary 验证 | 50 requests | 10 | PASSED | 45 | 5 | VAL-01/02/04 全通过 | ok=50 | 68 |
+
+生产 canary 的可读指标：
+
+| 指标 | 数值 | 含义 |
+|---|---:|---|
+| `user_factor_count_p50` | 2.5 | 单请求用户因子中位数 |
+| `copy_candidate_count_p50` | 2.0 | 单请求候选文案中位数 |
+| `user_factor_diversity_score` | 0.8437 | 用户因子表达多样性 |
+| `json_completion_when_underspec_rate` | 1.0 | 欠规格输入下 JSON 完成率 |
+| `trial_belief_update_count` | 4 | 本批次完成的 delta 后验更新数 |
+
+一个实际 delta 案例：
+
+| 字段 | 示例 |
+|---|---|
+| 目标 skill | `personalized-copy-generation` |
+| 操作 | `modify` |
+| 观察 | 多条 reject/hold 轨迹显示文案场景质感弱，常只堆叠“高口碑/大牌”等抽象属性 |
+| 改动 | 在文案方法中加入更明确的场景质感要求 |
+| 状态 | experimental，继续通过 trial 后验更新判断是否 promotion |
+
+---
+
+## 进化机制
+
+VIP COPY 的进化采用懒触发。系统先按并发管线累积轨迹，再在有足够 reject/hold
+案例时做一次集中分析：
+
+```mermaid
+flowchart TD
+    A["生产请求完成"] --> B["按 pipeline_id 累积轨迹"]
+    B --> C["优先收集 reject，其次 hold"]
+    C --> D{"达到阈值?"}
+    D -- 否 --> A
+    D -- 是 --> E["distill 生成 delta"]
+    E --> F["JSON edit patchability 校验"]
+    F --> G{"可确定性应用?"}
+    G -- 否 --> H["丢弃或记录失败原因"]
+    G -- 是 --> I["进入 portfolio"]
+    I --> J["小流量 trial"]
+    J --> K["和同批正式版本均分比较"]
+    K --> L["更新同一个 delta 后验"]
+    L --> M{"证据充分且正向?"}
+    M -- 否 --> I
+    M -- 是 --> N["promotion 到正式 skill"]
 ```
 
-这意味着每次实验天然隔离，不会自动借用旧 portfolio 或旧 journal。
+设计要点：
 
-如果你希望跨 runner 保留已经验证有效的进化结果，显式指定 `--state-dir`：
+- 各并发 pipeline 独立累计触发阈值。
+- delta 的后验按 canonical delta id 共享，多个并发 slot 测到同一个 delta 会共同更新。
+- trial 使用真实请求的小比例流量，让 delta 在接近生产的流量里验证。
+- 新 delta 先在临时 skill workspace 生效，不直接改正式 skill。
+- 只有后验显示“比未使用 delta 的正式版本均分更好”并达到证据要求后，才进入 promotion。
+
+---
+
+## 断点续传与产物管理
+
+默认情况下，每次运行的 `out_dir` 都是独立产物目录。如果目录非空且未传 `--resume`，
+runner 会拒绝继续写入，避免新实验误借用旧产物。
+
+```bash
+vip-copy \
+  --env-file .env.local \
+  --out-dir .runs/canary \
+  --num-requests 50 \
+  --concurrency 10
+
+vip-copy \
+  --env-file .env.local \
+  --out-dir .runs/canary \
+  --resume
+```
+
+如果希望跨 runner 保留已经验证过的进化记忆，显式指定共享 `state_dir`：
 
 ```bash
 vip-copy \
   --env-file .env.local \
   --out-dir .runs/batch_001 \
-  --state-dir .runs/evolution_state
+  --state-dir .runs/vip_copy_evolution_state \
+  --num-requests 500 \
+  --concurrency 50
 ```
 
-持久状态目录包含：
+这样每次 run 的证据目录仍然隔离，delta portfolio 和 journal 可以持续积累。
+
+---
+
+## 常用参数
+
+| 参数 | 默认值 | 含义 | 调参影响 |
+|---|---:|---|---|
+| `--num-requests` | 15 | 本次运行多少个 request slot | 越大指标越稳定，耗时和 token 成本越高 |
+| `--request-id` | 无 | 指定单个 request，可重复传入 | 适合排查具体案例；传入后通常不再依赖 `--num-requests` |
+| `--concurrency` | 3 | 同时运行多少条请求管线 | 越大吞吐越高，也更容易触发 provider 限流 |
+| `--timeout` | 300 | provider SDK/read timeout | 推理模型较慢时需要更高；过低会增加中断失败 |
+| `--call-deadline` | 300 | 单次流式调用墙钟 deadline | 控制单次 LLM 调用最长等待时间 |
+| `--max-inflight-calls` | 20 | 全局同时外发 API 调用上限 | 通常设为不超过 provider 配额；低于并发会主动削峰 |
+| `--node-max-attempts` | 3 | 每个生产节点 JSON 输出重试次数 | 越大越能吸收偶发格式失败，也会增加坏样本成本 |
+| `--trial-budget-fraction` | 0.02 | 每个 wave 分给 delta trial 的流量比例 | 越大进化反馈越快，但生产基线流量会减少 |
+| `--distill-min-trajectories` | 派生 | 单 pipeline 触发进化分析的轨迹阈值 | 越大分析更稳，进化更新更慢；越小反馈更快但噪声更高 |
+| `--state-dir` | `--out-dir` | delta portfolio / journal 存放位置 | 指向共享目录可跨 run 积累进化状态 |
+| `--resume` | false | 从 `completed_records.jsonl` 断点续传 | 用于同一个 `out_dir` 的中断恢复 |
+| `--no-distill` | false | 关闭本次运行的进化分析 | 适合只验证生产 DAG 或控制 token 成本 |
+
+常用环境变量：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `DEEPSEEK_API_KEY` | 必填 | DeepSeek API key |
+| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | 模型名 |
+| `DEEPSEEK_TIMEOUT_SECONDS` | 300 | SDK/read timeout |
+| `DEEPSEEK_CALL_DEADLINE_SECONDS` | 300 | streaming deadline |
+| `DEEPSEEK_MAX_INFLIGHT_CALLS` | 20 | 最大同时外发调用 |
+| `VIP_COPY_NODE_MAX_ATTEMPTS` | 3 | 节点 JSON 输出重试次数 |
+| `VIP_COPY_TRIAL_BUDGET_FRACTION` | 0.02 | trial 流量比例 |
+| `VIP_COPY_PROMOTION_MIN_READY` | 3 | 至少多少个 ready delta 才允许 promotion |
+| `VIP_COPY_TRIAL_RNG_SEED` | 未设置 | 固定 trial 随机种子，便于复盘 |
+
+---
+
+## 项目结构
 
 ```text
-.runs/evolution_state/
-├── portfolio.jsonl
-└── portfolio_journal.jsonl
+.
+├── seers_harness/
+│   ├── agentic/            # LLM JSON mode 与工具循环基础设施
+│   ├── domain/             # 结构化产物模型
+│   ├── evolution/          # delta、trial、后验、promotion
+│   ├── intake/             # CSV/request 预处理
+│   ├── provider_runtime/   # DeepSeek/OpenAI-compatible runtime
+│   ├── validation/         # runner、dashboard、落表、摘要
+│   └── workflow/           # DAG 节点运行与 skill 加载
+├── workflow-skills/
+│   ├── current/            # 生产 skills
+│   └── evolution/          # 进化 distillation skill
+├── scripts/                # 快速启动脚本
+├── requirements.txt        # 运行依赖
+├── pyproject.toml
+└── README.md
 ```
 
-即便使用共享 `state_dir`，每个 run 仍会写自己的本地 `portfolio.jsonl` 快照和
-`portfolio_journal.jsonl` 切片，方便事后分析“这一次 run 结束时到底使用了什么状态”。
+---
 
-promotion 只在 delta 状态机判定 ready 且满足 `VIP_COPY_PROMOTION_MIN_READY` 后触发。
-触发后会修改 `workflow-skills/current/`，并把旧 skill 内容和 promotion manifest 写入运行时归档目录。
-
-## 进化机制
-
-进化是懒触发、管线内统计、生产流量小比例探索。
-
-- scheduler 按 `pipeline_id` 累积成功轨迹。
-- 主要分析成功轨迹里的 `reject`，其次使用 `hold`，`admit` 更多作为对照。
-- 达到阈值后才调用 evolution skill 做一次 delta distillation。
-- delta 使用结构化 JSON edit 描述 `add/delete/modify`。
-- harness 对 delta 做 patchability 校验，只有能确定性应用到 live skill 的 delta 才进入 portfolio。
-- trial selection 会用历史 holdout request 替换少量生产 slot，并在临时 skill root 中应用 delta。
-- posterior 由 canonical delta id 共享维护；并行 slot 即使选中同一个 delta，也共同更新同一个后验分布。
-
-当前 canonical delta id 由 `target_skill`、`function_id`、`operation` 和 `patch` 内容寻址，
-避免模型输出的局部 id 互相冲突。
-
-## 超参数
-
-常用参数：
-
-| 参数 | 默认值 | 设置方式 | 含义 |
-|---|---:|---|---|
-| request 数 | `15` | `--num-requests` 或多个 `--request-id` | 本次运行的生产 slot 数 |
-| 并发 | `3` | `--concurrency` | 并行生产管线数 |
-| 节点重试 | `3` | `--node-max-attempts` 或 `VIP_COPY_NODE_MAX_ATTEMPTS` | 每个 DAG 节点的 JSON 输出重试预算 |
-| provider 超时 | `300s` | `--timeout` 或 `DEEPSEEK_TIMEOUT_SECONDS` | SDK/read timeout |
-| 流式 deadline | `300s` | `--call-deadline` 或 `DEEPSEEK_CALL_DEADLINE_SECONDS` | 单次流式调用墙钟 deadline |
-| 最大 inflight call | `20` | `--max-inflight-calls` 或 `DEEPSEEK_MAX_INFLIGHT_CALLS` | 全局 provider API semaphore |
-| trial 比例 | `0.02` | `--trial-budget-fraction` 或 `VIP_COPY_TRIAL_BUDGET_FRACTION` | 每个 wave 允许分给 delta trial 的比例 |
-| distill 阈值覆盖 | 派生 | `--distill-min-trajectories` 或 `VIP_COPY_DISTILL_MIN_TRAJECTORIES` | 固定懒触发阈值 |
-| promotion 最小数 | `3` | `VIP_COPY_PROMOTION_MIN_READY` | 至少多少个 ready delta 才允许 promotion |
-
-进化预算高级环境变量：
-
-| 环境变量 | 默认值 | 含义 |
-|---|---:|---|
-| `VIP_COPY_EVOLUTION_MIN_DISTILL_ELIGIBLE` | `5` | 单管线至少累积多少条 eligible 轨迹才允许 distill |
-| `VIP_COPY_EVOLUTION_TARGET_DISTILL_CALLS` | `5` | 单 batch 目标 distill 调用预算 |
-| `VIP_COPY_EVOLUTION_MAX_TRIAL_SLOTS` | 未设置 | 单 wave delta trial slot 硬上限 |
-| `VIP_COPY_TRIAL_RNG_SEED` | 未设置 | 固定 trial 随机采样种子，便于复现实验 |
-
-旧版 `SEERS_*` 环境变量仍作为兼容 fallback 被识别，但新配置建议统一使用
-`VIP_COPY_*`。
-
-当前 DeepSeek 默认推理强度是 `xhigh`。
-
-## 失败与恢复
-
-运行中：
-
-- 节点 JSON 输出失败会在节点内最多重试 3 次。
-- request 级业务输出失败会记录并跳过，不阻塞整个生产任务。
-- 主批次结束后，失败 request 会再重跑最多 3 次。
-- 最终仍失败的 request 会写入 `failed_requests.json`，包含失败原因和可重跑上下文。
-
-中断后：
-
-1. 保留同一个 `--out-dir`。
-2. 重新运行并加 `--resume`。
-3. runner 从 `completed_records.jsonl` 识别已完成 slot。
-4. 未完成 slot 按原 request 顺序继续运行。
-
-如果某个 trial 用 holdout request 替换了生产 slot `R4`，记录中的
-`original_request_id=R4` 会标记 `R4` 这个生产 slot 已完成。
-
-## 验证
-
-发布包不携带开发测试目录。最小发布态 smoke：
+## 推荐上线节奏
 
 ```bash
-python -m seers_harness.validation.runner --help
-python -c "import seers_harness, seers_harness.validation.runner as r; print(r.DEFAULT_BATCH_REQUESTS)"
-```
+# 1. 小批量真实链路
+bash scripts/run_quick.sh
 
-真实外发验证建议从小批量开始，例如 15 request、3 并发，通过后再逐步扩大到
-50 并发 canary 和百万 request 压测。当前版本已经完成小批量真实外发、50 request
-/ 10 并发真实批量和全量单测验证，可以进入大规模离线压测与灰度实验阶段。
+# 2. 常用 canary
+bash scripts/run_canary.sh
 
-最近已验证的工程面：
-
-- request 级多商品打包。
-- user-mining 缓存复用。
-- JSON-mode 生产节点重试。
-- DeepSeek flash / xhigh / 300s timeout 路径。
-- 懒触发 distillation。
-- content-addressed delta id。
-- current-batch holdout trial。
-- posterior journal 更新。
-- trial skill workspace 隔离。
-- `SKILL.md` 与 `SKILL.json` 同步后的结构化编辑路径。
-- run-local portfolio 快照。
-- `completed_records.jsonl` 断点续传。
-- `offline_copy_table.csv/jsonl` 四列离线落表。
-- terminal dashboard 进度条、并发运行态、trial 计数和失败计数。
-
-仍未完全生产认证的面：
-
-- 百万 request 长时间压力。
-- 50 并发外部 provider 限流与恢复。
-- 人工校准后的 rubric 稳定性。
-- 长周期 promotion rollback 演练。
-
-## 大规模压测建议
-
-建议按以下节奏上线压测：
-
-```bash
-# 1. 小规模真实链路
-vip-copy --env-file .env.local --out-dir .runs/canary_15x3 --num-requests 15 --concurrency 3
-
-# 2. 常用子集
-vip-copy --env-file .env.local --out-dir .runs/canary_50x10 --num-requests 50 --concurrency 10
-
-# 3. 高并发 canary
-vip-copy --env-file .env.local --out-dir .runs/canary_500x50 --num-requests 500 --concurrency 50 --max-inflight-calls 50
+# 3. 50 并发中等压测
+NUM_REQUESTS=500 CONCURRENCY=50 MAX_INFLIGHT_CALLS=50 bash scripts/run_canary.sh
 
 # 4. 百万级离线压测
-vip-copy --env-file .env.local --out-dir .runs/million_001 --num-requests 1000000 --concurrency 50 --max-inflight-calls 50
+CONFIRM_LARGE=1 bash scripts/run_large_template.sh
 ```
 
-生产压测时建议单独设置共享进化状态目录：
-
-```bash
-vip-copy \
-  --env-file .env.local \
-  --out-dir .runs/million_001 \
-  --state-dir .runs/vip_copy_evolution_state \
-  --num-requests 1000000 \
-  --concurrency 50 \
-  --max-inflight-calls 50
-```
-
-这样每次 runner 的证据目录仍然隔离，而已经被 trial 验证的 delta posterior 可以跨 run
-持续积累。
-
-## 代码结构
-
-```text
-workspace/
-├── seers_harness/
-│   ├── agentic/
-│   ├── evolution/
-│   ├── intake/
-│   ├── provider_runtime/
-│   ├── validation/
-│   └── workflow/
-├── workflow-skills/
-│   ├── current/
-│   └── evolution/
-└── pyproject.toml
-```
-
-## 工程约束
-
-- 保持一条生产路径，不恢复旧 staged validation 或兼容包装。
-- 生产节点保持 JSON-only，进化节点保持 tool-only。
-- 除非现有 JSON edit 无法表达必要操作，不新增 LLM-facing delta 工具。
-- `out_dir` 是一次运行的证据目录，完成后应视为不可变。
-- `state_dir` 只用于有意保留跨 run 进化记忆。
-- 解析、校验、patch、promotion、产物写入尽量由 deterministic harness 完成。
+当前版本已经通过小批量真实外发、50 request / 10 并发真实批量和全量单测验证，
+适合进入更大规模的离线压测与灰度实验。
