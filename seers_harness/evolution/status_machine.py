@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import math
 
-from seers_harness.evolution.delta_portfolio import DeltaPortfolioRow
+from seers_harness.evolution.delta_portfolio import (
+    DECISION_BOUNDARY_MEAN,
+    POSTERIOR_EVIDENCE_CONFIDENCE,
+    DeltaPortfolioRow,
+    posterior_probability_above,
+)
 
 
 def wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
@@ -21,29 +26,24 @@ def wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
 def apply_status_transitions(
     portfolio: list[DeltaPortfolioRow],
     *,
-    lcb_promote: float = 0.6,
-    lcb_reject: float = 0.2,
-    samples_promote: int = 5,
-    samples_reject: int = 10,
-    token_cost_p95_max: int = 2_000,
-    token_cost_deltas_by_delta: dict[str, list[int]] | None = None,
+    decision_boundary: float = DECISION_BOUNDARY_MEAN,
+    promote_confidence: float = POSTERIOR_EVIDENCE_CONFIDENCE,
+    reject_confidence: float = POSTERIOR_EVIDENCE_CONFIDENCE,
 ) -> list[DeltaPortfolioRow]:
-    """Transition experimental rows from rubric win/loss posterior evidence only.
-
-    Token-cost arguments are retained for compatibility with older callsites, but
-    token cost is record-only and never gates promotion or rejection.
-    """
-    _ = token_cost_p95_max, token_cost_deltas_by_delta
+    """Transition experimental rows from the maintained Beta posterior only."""
     transitioned: list[DeltaPortfolioRow] = []
     for row in portfolio:
         if row.status != "experimental":
             transitioned.append(row)
             continue
 
-        lcb = wilson_lcb(row.success_count, row.sample_count)
-        if lcb >= lcb_promote and row.sample_count >= samples_promote:
+        probability_positive = posterior_probability_above(
+            row,
+            threshold=decision_boundary,
+        )
+        if probability_positive >= promote_confidence:
             transitioned.append(row.model_copy(update={"status": "ready_for_review"}))
-        elif lcb <= lcb_reject and row.sample_count >= samples_reject:
+        elif (1.0 - probability_positive) >= reject_confidence:
             transitioned.append(row.model_copy(update={"status": "rejected"}))
         else:
             transitioned.append(row)

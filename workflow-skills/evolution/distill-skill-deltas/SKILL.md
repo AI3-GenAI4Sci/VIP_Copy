@@ -1,141 +1,133 @@
 ---
 name: distill-skill-deltas
-description: Use when distilling one request trajectory into evidence-backed skill delta proposals for the portfolio trial loop.
+description: Use when lazily distilling an accumulated bundle of production request trajectories into evidence-backed skill delta proposals for the portfolio trial loop.
 ---
 
 # Skill Delta 蒸馏
 
 ## 目标
 
-读取一个完整 request trajectory：payload、factor artifact、copy artifact、rubric judgment、工具调用序列和 token cost。输出一组可试验的 skill delta，交给后续 portfolio trial loop 临时应用、运行对比、再由真实结果决定是否保留。
+从同一 `pipeline_id` 下累积的一组 production trajectories 中，提炼可以进入 portfolio trial scheduler 的 skill delta。每条 trajectory 已经完成生产链路，并包含用户因子、文案候选、rubric judgment、JSON-mode 完成证据、工具调用记录和 token usage。
 
-这个 skill 不直接改生产 skill。它只把一次轨迹中的成功或失败，蒸馏成可复用、可验证、足够小的机制变更提案。
+这个节点的工作是把多条轨迹里的稳定机制现象转成小而可试验的 skill 变更。delta 产出只表示进入 eligible pool；后续由 scheduler 根据 trial budget、并发度、pressure 和 delta 后验选择有限线路做 trial。未被选中的 delta 会留在 pool 中等待后续预算。
 
-## 核心定义
+## 机制视角
 
-把一个 production skill 看成某种机制和方法论的抽象。它不是一段普通文本，而是一族复杂函数：
+把 production skill 看成一组可复用子函数：
 
 ```text
-Skill = {f_signal, f_factor, f_copy, f_judge, f_tool, f_finish, ...}
+Skill = {f_signal, f_factor, f_copy, f_judge, f_json, f_finish}
 ```
 
-每个子函数负责一种可复用行为，例如：
+delta 是对子函数的一次最小结构变更：
 
-- 如何读信号。
-- 如何从行为推导用户痛点。
-- 如何压缩 factor artifact。
-- 如何把 factor 转成文案。
-- 如何评审文案。
-- 如何调用 validate/save/finalize 工具。
+- `add`：补入当前 skill 缺少、且多条轨迹共同需要的判断。
+- `modify`：调整已有判断的输入、顺序、粒度或输出格式。
+- `delete`：移除稳定制造泛化、重复、误导或 JSON 边界破坏的判断。
 
-**delta** 是对这族函数中某个子函数的最小结构变更：
-
-- `add`：增加一个当前 skill 缺少的子函数。
-- `modify`：修改一个已有子函数的输入、判断、输出或执行顺序。
-- `delete`：删除一个会稳定制造错误、重复或干扰的子函数。
-
-delta 不是文本润色，不是一次候选文案修补，也不是把整份 skill 重写。它必须能在同类 trajectory 中再次触发，并能由 trial loop 单独检验。
+好的 delta 能被同类 request 再次触发，并能通过 trial 结果单独验证。它的证据来自轨迹，而不是来自对单条文案的临时修补。
 
 ## 输入证据
 
-trajectory 是唯一证据来源。当前输入 payload 只包含这些结构化上下文：
+`trajectory bundle` 是唯一证据来源，核心字段包括：
 
-- `request_id`：当前被蒸馏的 request 标识。
-- `personalized_user_mining`：用户因子挖掘 artifact，包含 user factors、信号依据、需求/痛点、场景触发、购买启发和 evidence refs。
-- `personalized_copy_generation`：copy 生成 artifact，包含候选 copy、对应 factor、商品承接、事实承接和商业角度。
-- `personalized_copy_rubric`：rubric artifact，包含每条 copy 的分项评分、总分、admit/hold/reject 决策、强弱点和失败标签。
-- `tool_calls_per_node`：三个 production node 的工具调用记录，用于判断 validate/save/finalize 是否完成，以及工具参数是否结构化。
-- `usage_per_node`：三个 production node 的 token/turn usage，用于定位重复推理、无效循环或 artifact 冗余。
+- `request_id`：当前 bundle id。
+- `pipeline_id`：证据所属 pipeline，例如 `production`、`trial:D_001`。
+- `trajectory_count`：bundle 内轨迹数。
+- `trajectories`：轨迹数组。
+- `rubric_decision_bucket`：每条轨迹的 rubric 决策桶，优先级为 `reject` 高于 `hold`。
+- `personalized_user_mining`：用户因子 artifact。
+- `personalized_copy_generation`：文案生成 artifact。
+- `personalized_copy_rubric`：rubric artifact。
+- `tool_calls_per_node`：各 production node 的工具调用记录。
+- `usage_per_node`：各 production node 的 token/turn usage。
 
-当前输入不直接包含原始表格 payload、完整用户画像原文、完整商品列表原文、messages 全文或 private reasoning。若需要引用用户、商品或场景事实，只能引用上述 artifact 和 tool call 中已经结构化保存的字段。
+读取顺序以 `reject` 轨迹为主，其次读取 `hold` 轨迹。`reject` 常暴露硬门失败、事实承接断裂、结构输出破坏；`hold` 常暴露方向存在但强度不足的问题，例如动机弱、商品价值弱、场景弱、表达模板化。`admit` 样本只作为对照，不作为主要触发源。
 
-读取时关注：
-
-- 用户信号、商品事实和列表上下文。
-- factor 如何建立，是否抓住了可复用转化假设。
-- copy 如何从 factor 生成，是否形成点击/购买动机。
-- rubric 如何评分，是否暴露了稳定失败类型或成功机制。
-- 工具调用是否完成 validate/save/finalize。
-- token cost 是否显示出重复推理、冗余 artifact 或无效循环。
-
-引用证据时只使用 neutral `evidence_ref`。不要把原始私有轨迹、用户字段、private reasoning 或 runtime-only labels 抄进 observation/proposed_change。
+证据引用使用中性 `evidence_refs`。当原始证据是数组或对象时，`value` 写成字符串摘要，例如 `"weak_product_value, weak_scene_texture, ..."` 或 `"防晒霜/乳, 牙膏/牙粉, ..."`。
 
 ## 蒸馏流程
 
-1. **重建当前函数族。** 先判断目标 production skill 当前实际包含哪些子函数：信号读取、痛点推导、factor 压缩、copy 生成、评审、工具终止等。
+1. 先看 bundle 是否形成稳定模式。若轨迹只是偶发现象、样本之间没有共同机制，最终提交空 `deltas`。
+2. 从 `reject` 到 `hold` 聚合失败类型、低分轴、商品承接路径、用户因子路径和 JSON 完成证据。
+3. 把现象归因到一个 production skill 子函数，例如信号读取、痛点推导、商品承接、短文案表面、rubric 约束或 JSON 终止。
+4. 为每个稳定现象选择 `add`、`modify` 或 `delete`，并写出能被精确应用到结构化 skill 源的 `patch.edits`。`path` 使用 JSON Pointer；修改已有章节正文时按 heading 寻址，例如 `/sections/by_heading/方法/body`。追加新章节用 `/sections/-`。不要使用 `/sections/4/body` 这类数字下标，因为 skill 被手工调整或并发进化后 section 顺序会漂移。
+5. 对有必要沉淀的 delta 调用 `record_delta_change`；证据不足时不调用工具。
+6. 完成记录后停止工具调用。harness 会根据已记录的 `delta_changes` 确定性组装 `DeltaDistillationArtifact`；没有 change 时得到空 `deltas`。
 
-2. **定位轨迹现象。** 从 trajectory 中找成功路径和失败路径。成功路径说明某个子函数值得保留或增强；失败路径说明某个子函数缺失、过弱、过强、顺序错位或产生干扰。
+## 并行边界
 
-3. **归因到单个子函数。** 每个 delta 只瞄准一个子函数。若一个现象涉及多个机制，拆成多个 delta，让 trial loop 能分辨哪个变化真的有效。
+distill 触发按 `pipeline_id` 独立累计。不同 pipeline 的触发计数互不混用；`production`、`trial:D_001`、`trial:D_002` 各自拥有独立的轨迹阈值和 bundle，避免不同 skill surface 的现象互相污染。
 
-4. **选择 delta 类型。**
-   - `add`：轨迹显示某个必要判断完全缺位。
-   - `modify`：轨迹显示已有判断方向对，但粒度、顺序、输入或输出不够好。
-   - `delete`：轨迹显示某个判断稳定导致重复、泛化、误导或工具卡住。
+delta 的 portfolio 状态和后验分布按 `delta_id` 共享。同一个 delta 被多条并行线路抽中时，多条结果共同更新 `belief_alpha`、`belief_beta`、sample/success/failure counters 和 lifecycle status。并行提供更多观测，不复制后验。
 
-5. **写 observation。** 用一两句话描述 trajectory 中可复用的现象，并引用 evidence_ref。
+## target_skill
 
-6. **写 proposed change。** 描述对子函数的最小变更：触发条件、应读取的输入、应产生的输出、影响的 artifact 或工具调用。
-
-7. **提交 artifact。** 通过 delta 工具记录 observation 和 change，最后走 final submit。
-
-## Delta 粒度
-
-好的 delta 像对子函数签名或函数体的一次小改：
-
-- `add f_behavior_to_painpoint`：在 factor mining 中加入“行为事实 -> 显性需求/潜在诉求 -> 痛点/顾虑”的推导函数。
-- `modify f_copy_surface`：把 copy 输出从“重复商品名”改成“痛点/场景/体验结果承接商品价值”。
-- `modify f_finish`：在 copy validate 通过后，下一次工具调用必须 save。
-- `delete f_identity_label_surface`：移除把会员等级、年龄、身份标签直接写进可见文案的路径。
-
-弱 delta 通常有这些形态：
-
-- 只改某一句候选文案。
-- 只说“加强个性化”“更自然”“更精准”。
-- 把多个无关机制打包成一个大改动。
-- 没有 evidence_ref。
-- 目标 skill 路径无法解析。
-
-## 成功路径与失败路径
-
-**成功路径**：factor、copy、rubric 和工具调用形成连贯链路。此时 delta 应提炼可复用机制，例如某种信号交叉验证、某种痛点前置、某种商品承接、某种终止协议。
-
-**失败路径**：链路在某处坍缩。常见失败包括：
-
-- factor 只是信号改名，没有转化假设。
-- copy 复述商品名，缺少用户场景或痛点。
-- 文案有营销感但商品事实承接不足。
-- rubric 放过了泛化文案。
-- reflection 后没有继续 validate/save/finalize。
-- artifact 字段保存了重复思考，增加 token cost。
-
-失败路径 delta 应指向造成失败的 skill 子函数，而不是指责单次输出。
-
-## target_skill 格式
-
-`target_skill` 必须是允许自动试验的 production skill，且只能从以下两个值中选择：
+`target_skill` 只能指向 production request loop 中允许试验的 skill：
 
 ```text
 current/personalized-user-mining/SKILL.md
 current/personalized-copy-generation/SKILL.md
 ```
 
-不要输出 rubric、evolution、portfolio、trial runner 或其他工程代码作为 target。当前 evolution 只优化用户因子挖掘和 copy 生成两类生产 skill。
+## 可用工具
 
-旧的拆分 generation skills 是归档参考，不是 production target。Evolution skills 本身也不是 production request loop 的目标 skill。
+本节点使用一个 delta 记录工具：
 
-## 工具调用
+- `record_delta_change`
 
-- 对每个值得记录的观察调用 `record_delta_observation`。
-- 对每个 proposed change 调用 `record_delta_change`，使用同一个 canonical `target_skill` 格式。
-- 最后调用 `submit_delta_distillation_final`。
+`record_delta_change` 只在存在稳定机制现象时调用。证据不足时，不调用工具并结束；harness 会确定性提交空 `deltas`。存在 delta 时，为每条 delta 记录一次 change 后结束；harness 会把所有 `record_delta_change` 结果组装为最终 artifact。
 
-submit handler 会校验 `DeltaDistillationArtifact`、evidence、privacy gate 和 target path，然后交给 portfolio writer。live skill 文件不会在本阶段被修改。
+## 工具参数形状
 
-## 工程硬门
+所有工具参数都是严格 JSON object，只包含下列形状中的字段。
 
-- 每个 delta 必须有 evidence_ref。
-- 每个 delta 只修改、增加或删除一个子函数。
-- 每个 delta 必须指向可解析的 production target skill。
-- 输出不增加描述模型自我判断的元评价字段。
-- observation 和 proposed_change 使用可复用机制语言，不复制私有轨迹文本。
+`record_delta_change`：
+
+```json
+{
+  "delta_id": "D_001",
+  "target_skill": "current/personalized-copy-generation/SKILL.md",
+  "function_id": "modify_f_copy_surface",
+  "operation": "modify",
+  "observation": "多条轨迹共同暴露的机制现象",
+  "change_summary": "本次机制变更的人读摘要",
+  "patch": {
+    "edits": [
+      {
+        "op": "replace",
+        "path": "/sections/by_heading/方法/body",
+        "value": "替换后的完整章节正文，保留 Markdown 列表、代码块和必要空行；..."
+      }
+    ]
+  },
+  "evidence_refs": [
+    {
+      "path": "trajectories.0.personalized_copy_rubric.judgments.0.failure_tags",
+      "value": "weak_product_value, weak_scene_texture, ..."
+    },
+    {
+      "path": "trajectories.1.personalized_copy_generation.candidates.0.product_binding",
+      "value": "商品承接只停留在类目层，缺少差异化属性"
+    }
+  ],
+  "applicable_surface": ["personalized-copy-generation"],
+  "failure_types": ["weak_product_value", "weak_scene_texture"]
+}
+```
+
+最终 artifact 由 harness 确定性生成，模型不要调用 final submit 工具。生成逻辑等价于：
+
+```json
+{
+  "request_id": "当前 bundle id",
+  "scenario_id": "当前 bundle id",
+  "deltas": ["所有 record_delta_change 的参数对象；没有 change 时为空数组"]
+}
+```
+
+`evidence_refs[].path` 是字符串。`evidence_refs[].value` 只能是字符串、数字、布尔值或 null；数组和对象证据压缩成字符串摘要。
+
+## 输出
+
+生成 `DeltaDistillationArtifact`。

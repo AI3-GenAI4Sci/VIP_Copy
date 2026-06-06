@@ -74,7 +74,7 @@ def user_state_from_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def product_from_row(row: dict[str, Any], *, category: str, line_no: int) -> dict[str, Any]:
-    product_id = resolve_first(row, ("item_id", "spu_id", "source_spu_id")) or f"row-{line_no}"
+    product_id = _resolve_identity(row, ("item_id", "spu_id", "source_spu_id")) or f"row-{line_no}"
     group_key = str(row.get("item_cat3_name") or category).strip()
     attributes = {
         key: humanize(key, value)
@@ -101,7 +101,7 @@ def product_from_row(row: dict[str, Any], *, category: str, line_no: int) -> dic
         "source_ids": {
             key: row[key]
             for key in ("item_id", "spu_id", "source_spu_id")
-            if present(row.get(key))
+            if _valid_identity(row.get(key))
         },
         "group_key": group_key,
         "category": category,
@@ -112,10 +112,27 @@ def product_from_row(row: dict[str, Any], *, category: str, line_no: int) -> dic
 
 
 def stable_product_key(row: dict[str, Any]) -> str:
-    source_key = resolve_first(row, ("source_spu_id", "spu_id", "item_id"))
+    source_key = _resolve_identity(row, ("item_id", "spu_id", "source_spu_id"))
     if source_key:
         return f"id:{source_key}"
     return f"name:{canonical_product_name(row.get('item_name'))}"
+
+
+def _resolve_identity(row: dict[str, Any], fields: tuple[str, ...]) -> str:
+    for field in fields:
+        value = row.get(field)
+        if _valid_identity(value):
+            return str(value)
+    return ""
+
+
+def _valid_identity(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return text.lower() not in {"0", "0.0", "none", "null", "nan"}
 
 
 def canonical_product_name(value: Any) -> str:

@@ -21,6 +21,9 @@ class PortfolioJournalEntry(BaseModel):
     score_delta: float = 0.0
     token_cost_delta: int = 0
     behavioral_metric_lift: dict[str, float] = Field(default_factory=dict)
+    baseline_reference_strategy: str = "exact_request"
+    baseline_reference_sample_count: int = 1
+    baseline_reference_cohort_key: str = ""
     ts: str = ""
 
     model_config = {"extra": "forbid"}

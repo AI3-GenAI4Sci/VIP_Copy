@@ -1,31 +1,9 @@
-"""Strict tool specifications for personalized-copy workflow tools."""
+"""Strict final-submit tool specifications for the production workflow."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from seers_harness.tools.basic_tools import BASIC_TOOLS_SPEC
-
-_ARTIFACT_ACTION_SCHEMA: dict[str, Any] = {
-    "type": "string",
-    "enum": [
-        "read",
-        "upsert_many",
-        "delete_many",
-        "validate",
-        "save",
-    ],
-}
-
-_EVIDENCE_REF_ITEM: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["path", "value"],
-    "properties": {
-        "path": {"type": "string"},
-        "value": {"type": ["string", "number", "boolean", "null"]},
-    },
-}
 
 _USER_FACTOR_ITEM_REQUIRED = [
     "user_factor_id",
@@ -34,7 +12,6 @@ _USER_FACTOR_ITEM_REQUIRED = [
     "scene_trigger",
     "buying_heuristic",
     "expression_hooks",
-    "evidence_refs",
 ]
 _USER_FACTOR_ITEM_PROPERTIES: dict[str, Any] = {
     "user_factor_id": {"type": "string"},
@@ -43,7 +20,6 @@ _USER_FACTOR_ITEM_PROPERTIES: dict[str, Any] = {
     "scene_trigger": {"type": "string"},
     "buying_heuristic": {"type": "string"},
     "expression_hooks": {"type": "array", "items": {"type": "string"}},
-    "evidence_refs": {"type": "array", "items": dict(_EVIDENCE_REF_ITEM)},
 }
 
 _CANDIDATE_ITEM_REQUIRED = [
@@ -66,18 +42,21 @@ _CANDIDATE_ITEM_PROPERTIES: dict[str, Any] = {
 }
 
 
-MAINTAIN_USER_FACTORS_ARTIFACT_SPEC: dict[str, Any] = {
+SUBMIT_USER_FACTORS_FINAL_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "maintain_user_factors_artifact",
-        "description": "Maintain user personalization factor artifact state.",
+        "name": "submit_user_factors_final",
+        "description": (
+            "Submit the final UserPersonalizationArtifact. This is the only "
+            "tool available to personalized-user-mining; the harness performs "
+            "schema validation and finalization deterministically."
+        ),
         "strict": True,
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["action", "user_factors", "user_factor_ids"],
+            "required": ["user_factors"],
             "properties": {
-                "action": dict(_ARTIFACT_ACTION_SCHEMA),
                 "user_factors": {
                     "type": "array",
                     "items": {
@@ -87,41 +66,27 @@ MAINTAIN_USER_FACTORS_ARTIFACT_SPEC: dict[str, Any] = {
                         "properties": dict(_USER_FACTOR_ITEM_PROPERTIES),
                     },
                 },
-                "user_factor_ids": {"type": "array", "items": {"type": "string"}},
             },
         },
     },
 }
 
 
-REFLECT_ON_USER_FACTOR_COVERAGE_SPEC: dict[str, Any] = {
+SUBMIT_COPY_CANDIDATES_FINAL_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "reflect_on_user_factor_coverage",
-        "description": "Return user-factor coverage reflection questions.",
+        "name": "submit_copy_candidates_final",
+        "description": (
+            "Submit the final CopyGenerationArtifact. This is the only tool "
+            "available to personalized-copy-generation; the harness performs "
+            "schema validation and finalization deterministically."
+        ),
         "strict": True,
         "parameters": {
             "type": "object",
             "additionalProperties": False,
-            "required": [],
-            "properties": {},
-        },
-    },
-}
-
-
-MAINTAIN_COPY_ARTIFACT_SPEC: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "maintain_copy_artifact",
-        "description": "Maintain copy candidate artifact state.",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["action", "candidates", "candidate_ids", "product_id"],
+            "required": ["candidates"],
             "properties": {
-                "action": dict(_ARTIFACT_ACTION_SCHEMA),
                 "candidates": {
                     "type": "array",
                     "items": {
@@ -131,25 +96,7 @@ MAINTAIN_COPY_ARTIFACT_SPEC: dict[str, Any] = {
                         "properties": dict(_CANDIDATE_ITEM_PROPERTIES),
                     },
                 },
-                "candidate_ids": {"type": "array", "items": {"type": "string"}},
-                "product_id": {"type": "string"},
             },
-        },
-    },
-}
-
-
-REFLECT_ON_COPY_QUALITY_SPEC: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "reflect_on_copy_quality",
-        "description": "Return copy quality reflection questions.",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": [],
-            "properties": {},
         },
     },
 }
@@ -164,15 +111,35 @@ _AXIS_SCORE_PROPERTIES: dict[str, Any] = {
     "axis_id": {
         "type": "string",
         "enum": [
-            "user_factor_grounding",
-            "product_binding",
-            "personalized_conversion",
-            "commercial_sharpness",
-            "expression_boundary",
+            "motivation_fit",
+            "product_value",
+            "conversion_pull",
+            "copycraft",
+            "distinctiveness",
+            "scene_texture",
+            "benefit_clarity",
         ],
     },
     "score": {"type": "integer", "minimum": 0, "maximum": 5},
     "diagnostic": {"type": "string"},
+}
+
+_OBJECTIVE_CHECK_REQUIRED = [
+    "check_id",
+    "passed",
+]
+_OBJECTIVE_CHECK_PROPERTIES: dict[str, Any] = {
+    "check_id": {
+        "type": "string",
+        "enum": [
+            "no_private_trace",
+            "no_specific_numeric_claim",
+            "no_product_name_echo",
+            "product_value_visible",
+            "publishable_copy",
+        ],
+    },
+    "passed": {"type": "boolean"},
 }
 
 _JUDGMENT_REQUIRED = [
@@ -181,12 +148,12 @@ _JUDGMENT_REQUIRED = [
     "product_id",
     "copy_text",
     "user_factor_id",
+    "objective_checks",
     "axis_scores",
     "total_score",
     "main_strength",
     "main_weakness",
     "failure_tags",
-    "decision",
 ]
 _JUDGMENT_PROPERTIES: dict[str, Any] = {
     "candidate_id": {"type": "string"},
@@ -194,6 +161,15 @@ _JUDGMENT_PROPERTIES: dict[str, Any] = {
     "product_id": {"type": "string"},
     "copy_text": {"type": "string"},
     "user_factor_id": {"type": "string"},
+    "objective_checks": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": list(_OBJECTIVE_CHECK_REQUIRED),
+            "properties": dict(_OBJECTIVE_CHECK_PROPERTIES),
+        },
+    },
     "axis_scores": {
         "type": "array",
         "items": {
@@ -203,27 +179,10 @@ _JUDGMENT_PROPERTIES: dict[str, Any] = {
             "properties": dict(_AXIS_SCORE_PROPERTIES),
         },
     },
-    "total_score": {"type": "integer", "minimum": 0, "maximum": 25},
+    "total_score": {"type": "integer", "minimum": 0, "maximum": 35},
     "main_strength": {"type": "string"},
     "main_weakness": {"type": "string"},
     "failure_tags": {"type": "array", "items": {"type": "string"}},
-    "decision": {"type": "string", "enum": ["admit", "hold", "reject"]},
-}
-
-
-JUDGE_CANDIDATE_SPEC: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "judge_candidate",
-        "description": "Append one rubric judgment for one candidate.",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": list(_JUDGMENT_REQUIRED),
-            "properties": dict(_JUDGMENT_PROPERTIES),
-        },
-    },
 }
 
 
@@ -231,7 +190,10 @@ SUBMIT_JUDGMENTS_FINAL_SPEC: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "submit_judgments_final",
-        "description": "Submit the final PersonalizedCopyRubricArtifact.",
+        "description": (
+            "Submit the final PersonalizedCopyRubricArtifact. This is the "
+            "only tool available to personalized-copy-rubric-judge."
+        ),
         "strict": True,
         "parameters": {
             "type": "object",
@@ -254,20 +216,7 @@ SUBMIT_JUDGMENTS_FINAL_SPEC: dict[str, Any] = {
 
 
 TOOLS_SPEC: dict[str, list[dict[str, Any]]] = {
-    "personalized-user-mining": [
-        MAINTAIN_USER_FACTORS_ARTIFACT_SPEC,
-        REFLECT_ON_USER_FACTOR_COVERAGE_SPEC,
-        *BASIC_TOOLS_SPEC,
-    ],
-    "personalized-copy-generation": [
-        MAINTAIN_COPY_ARTIFACT_SPEC,
-        REFLECT_ON_COPY_QUALITY_SPEC,
-        *BASIC_TOOLS_SPEC,
-    ],
-    "personalized-copy-rubric-judge": [
-        JUDGE_CANDIDATE_SPEC,
-        SUBMIT_JUDGMENTS_FINAL_SPEC,
-        *BASIC_TOOLS_SPEC,
-    ],
+    "personalized-user-mining": [SUBMIT_USER_FACTORS_FINAL_SPEC],
+    "personalized-copy-generation": [SUBMIT_COPY_CANDIDATES_FINAL_SPEC],
+    "personalized-copy-rubric-judge": [SUBMIT_JUDGMENTS_FINAL_SPEC],
 }
-

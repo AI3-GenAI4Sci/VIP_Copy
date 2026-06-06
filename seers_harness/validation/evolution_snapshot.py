@@ -70,6 +70,7 @@ def write_evolution_snapshot(
     delta_portfolio_after: list[Any] = []
     trials: list[dict[str, Any]] = []
     exploration_decision: dict[str, Any] = {}
+    request_failures: list[dict[str, Any]] = []
 
     for event in events:
         if not isinstance(event, dict):
@@ -96,6 +97,9 @@ def write_evolution_snapshot(
         elif event_type == "trial_succeeded":
             trial_id = event.get("trial_id", "")
             entry: dict[str, Any] = {"trial_id": trial_id, "status": "succeeded"}
+            request_id = event.get("request_id")
+            if request_id is not None:
+                entry["request_id"] = request_id
             delta_id = event.get("delta_id")
             if delta_id is not None:
                 entry["delta_id"] = delta_id
@@ -103,6 +107,9 @@ def write_evolution_snapshot(
         elif event_type == "trial_failed":
             trial_id = event.get("trial_id", "")
             entry: dict[str, Any] = {"trial_id": trial_id, "status": "failed"}
+            request_id = event.get("request_id")
+            if request_id is not None:
+                entry["request_id"] = request_id
             delta_id = event.get("delta_id")
             if delta_id is not None:
                 entry["delta_id"] = delta_id
@@ -117,6 +124,19 @@ def write_evolution_snapshot(
                 # sanitise, we catch it here.
                 entry["exception_message"] = _safe_message(str(exc_msg))
             trials.append(entry)
+        elif event_type == "request_failed":
+            entry = {
+                "request_id": event.get("request_id"),
+                "failure_class": event.get("failure_class"),
+                "exception": _safe_message(str(event.get("exception") or "")),
+            }
+            records = event.get("workflow_records")
+            if isinstance(records, list):
+                entry["workflow_records"] = records
+            trace = event.get("workflow_trace")
+            if isinstance(trace, list):
+                entry["workflow_trace"] = trace
+            request_failures.append(entry)
         # trial_started and any unknown type are intentionally ignored
         # (reducer scope per D-11 degradation rules).
 
@@ -125,6 +145,7 @@ def write_evolution_snapshot(
         "delta_portfolio_after": delta_portfolio_after,
         "exploration_decision": exploration_decision,
         "trials": trials,
+        "request_failures": request_failures,
     }
 
     p = Path(out_path)

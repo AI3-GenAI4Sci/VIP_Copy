@@ -1,14 +1,13 @@
-"""batch_summary.json writer — Phase 7 plan 07-03 (D-10, D-12, D-13, D-16, D-22d).
+"""Production batch summary writer.
 
 Aggregates the per-request rows materialised by
 :func:`seers_harness.validation.index_writer.write_index` into a single
-stage-level summary that downstream case-analysis reads when picking
+batch-level summary that downstream case-analysis reads when picking
 which requests to read.
 
-Schema (per D-22d):
+Schema:
 
     {
-        "stage": 1 | 2 | 3,
         "batch_id": str,
         "totals": {
             "requests": int,
@@ -72,6 +71,7 @@ def write_batch_summary(
     out_path: str | Path | None = None,
     *,
     final_portfolio: list[Any] | None = None,
+    trial_belief_update_count: int | None = None,
 ) -> None:
     """Read ``index_path`` and write the aggregated ``batch_summary.json``.
 
@@ -93,11 +93,14 @@ def write_batch_summary(
     fail_val02: list[str] = []
     fail_val04: list[str] = []
     # Use a list (not a set) so the auditor sees the queue in row-order,
-    # which mirrors the order in which the stage runner submitted them;
+    # which mirrors the order in which the batch runner submitted them;
     # deduplicate via a parallel seen-set.
     queue: list[str] = []
     seen_in_queue: set[str] = set()
     by_failure_class: dict[str, int] = {}
+
+    production_rows = [row for row in rows if not _is_trial_row(row)]
+    trial_rows = [row for row in rows if _is_trial_row(row)]
 
     for index, row in enumerate(rows):
         cls = row.get("failure_class", "ok") if isinstance(row, dict) else "ok"
@@ -105,6 +108,7 @@ def write_batch_summary(
 
         if not isinstance(row, dict):
             continue
+        is_trial = _is_trial_row(row)
         # IN-06 — fall back to a positional sentinel when the row's
         # node_id is missing/empty so fail_lists and manual_review_queue
         # never carry a bare "" entry. The auditor sees exactly which
@@ -120,20 +124,21 @@ def write_batch_summary(
         # ``False`` enters the fail_list (a ``None`` would mean "judge
         # could not run" — surfacing it via manual_review_queue is the
         # right routing).
-        if row.get("VAL-01_pass") is True:
-            val01_pass += 1
-        elif row.get("VAL-01_pass") is False:
-            fail_val01.append(node_id)
+        if not is_trial:
+            if row.get("VAL-01_pass") is True:
+                val01_pass += 1
+            elif row.get("VAL-01_pass") is False:
+                fail_val01.append(node_id)
 
-        if row.get("VAL-02_pass") is True:
-            val02_pass += 1
-        elif row.get("VAL-02_pass") is False:
-            fail_val02.append(node_id)
+            if row.get("VAL-02_pass") is True:
+                val02_pass += 1
+            elif row.get("VAL-02_pass") is False:
+                fail_val02.append(node_id)
 
-        if row.get("VAL-04_pass") is True:
-            val04_pass += 1
-        elif row.get("VAL-04_pass") is False:
-            fail_val04.append(node_id)
+            if row.get("VAL-04_pass") is True:
+                val04_pass += 1
+            elif row.get("VAL-04_pass") is False:
+                fail_val04.append(node_id)
 
         # manual_review_queue — D-13 / D-12 / D-10 union
         needs_review = False
@@ -159,11 +164,22 @@ def write_batch_summary(
         queue = queue[:_MANUAL_REVIEW_QUEUE_CAP]
         queue.append(f"<truncated: {overflow} more>")
 
+    behavioral_metrics = build_behavioral_report(
+        index_path_p.parent,
+        final_portfolio=final_portfolio,
+    )
+    if trial_belief_update_count is not None:
+        behavioral_metrics["trial_belief_update_count"] = max(
+            0,
+            int(trial_belief_update_count),
+        )
+
     summary: dict[str, Any] = {
-        "stage": index_doc.get("stage"),
         "batch_id": index_doc.get("batch_id"),
         "totals": {
-            "requests": len(rows),
+            "requests": len(production_rows),
+            "records": len(rows),
+            "trial_records": len(trial_rows),
             "val01_pass": val01_pass,
             "val02_pass": val02_pass,
             "val04_pass": val04_pass,
@@ -174,10 +190,7 @@ def write_batch_summary(
             "VAL-04": fail_val04,
         },
         "by_failure_class": by_failure_class,
-        "behavioral_metrics": build_behavioral_report(
-            index_path_p.parent,
-            final_portfolio=final_portfolio,
-        ),
+        "behavioral_metrics": behavioral_metrics,
         "manual_review_queue": queue,
     }
 
@@ -186,3 +199,9 @@ def write_batch_summary(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+def _is_trial_row(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return row.get("record_kind") == "trial" or bool(row.get("trial_selected_delta_id"))

@@ -1,1 +1,1 @@
-"""C17 — true tool-use harness for personalized recommendation copy."""
+"""VIP COPY production harness for personalized ecommerce copy."""

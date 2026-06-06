@@ -1,4 +1,4 @@
-"""Validation stage dashboard reporting."""
+"""Production batch dashboard reporting."""
 
 from __future__ import annotations
 
@@ -18,6 +18,15 @@ from seers_harness.workflow.progress import (
 )
 
 
+VIP_COPY_BANNER = [
+    r"__     _____ ____     ____ ___  ______   __",
+    r"\ \   / /_ _|  _ \   / ___/ _ \|  _ \ \ / /",
+    r" \ \ / / | || |_) | | |  | | | | |_) \ V / ",
+    r"  \ V /  | ||  __/  | |__| |_| |  __/ | |  ",
+    r"   \_/  |___|_|      \____\___/|_|    |_|  ",
+]
+
+
 class BatchDashboard:
     """Thread-safe production-run dashboard fed by request/node events."""
 
@@ -25,14 +34,12 @@ class BatchDashboard:
         self,
         *,
         total: int,
-        validation_stage: int,
         concurrency: int,
         out_dir: Path,
         stream: Any = sys.stderr,
         max_running: int = 5,
     ) -> None:
         self.total = total
-        self.validation_stage = validation_stage
         self.concurrency = concurrency
         self.out_dir = out_dir
         self.reporter = DashboardReporter(
@@ -46,6 +53,7 @@ class BatchDashboard:
         self._lock = threading.Lock()
         self._running: dict[str, DashboardTask] = {}
         self._completed_ids: set[str] = set()
+        self._completed_trial_ids: set[str] = set()
         self._ok = 0
         self._failed = 0
         self._trials = 0
@@ -68,14 +76,18 @@ class BatchDashboard:
                     )
                 elif message == "done":
                     status = str(fields.get("status") or "")
-                    self._complete_locked(
-                        request_id,
-                        ok=status == "SUCCEEDED",
-                        detail=(
-                            f"artifacts={fields.get('artifacts', 0)} "
-                            f"{fields.get('duration', '')}".strip()
-                        ),
+                    detail = (
+                        f"artifacts={fields.get('artifacts', 0)} "
+                        f"{fields.get('duration', '')}".strip()
                     )
+                    if _is_trial_request_id(request_id):
+                        self._running.pop(request_id, None)
+                    else:
+                        self._complete_locked(
+                            request_id,
+                            ok=status == "SUCCEEDED",
+                            detail=detail,
+                        )
             elif scope.startswith("node "):
                 node = scope.removeprefix("node ")
                 if message == "start":
@@ -112,13 +124,27 @@ class BatchDashboard:
         with self._lock:
             ok = record.get("exception") is None
             if record.get("trial_selected_delta_id"):
-                self._trials += 1
-            detail = (
-                f"artifacts={1 if record.get('artifact') is not None else 0}"
-                if ok
-                else str(record.get("failure_class") or "failed")
-            )
-            self._complete_locked(request_id, ok=ok, detail=detail)
+                detail = (
+                    f"trial artifacts={1 if record.get('artifact') is not None else 0}"
+                    if ok
+                    else f"trial {record.get('failure_class') or 'failed'}"
+                )
+                if _is_direct_trial_record(record):
+                    if request_id not in self._completed_ids:
+                        self._trials += 1
+                    self._complete_locked(request_id, ok=ok, detail=detail)
+                else:
+                    self._complete_trial_locked(request_id, ok=ok, detail=detail)
+            else:
+                detail = (
+                    f"artifacts={1 if record.get('artifact') is not None else 0}"
+                    if ok
+                    else str(record.get("failure_class") or "failed")
+                )
+                self._complete_locked(request_id, ok=ok, detail=detail)
+            for alias in _record_alias_ids(record):
+                if alias != request_id:
+                    self._running.pop(alias, None)
             self._render_locked()
 
     def fail_request(self, request_id: str, exc: BaseException) -> None:
@@ -148,16 +174,28 @@ class BatchDashboard:
         self._recent.insert(0, DashboardRecent(status, request_id, detail))
         self._recent = self._recent[:3]
 
+    def _complete_trial_locked(self, request_id: str, *, ok: bool, detail: str) -> None:
+        if request_id in self._completed_trial_ids:
+            return
+        self._completed_trial_ids.add(request_id)
+        self._running.pop(request_id, None)
+        self._trials += 1
+        status = "ok" if ok else "failed"
+        self._recent.insert(0, DashboardRecent(status, request_id, detail))
+        self._recent = self._recent[:3]
+
     def _render_locked(self) -> None:
         completed = len(self._completed_ids)
         running = list(self._running.values())
         queued = max(0, self.total - completed - len(running))
         self.reporter.update(
             DashboardState(
-                title="SEERS production run",
+                banner_lines=VIP_COPY_BANNER,
+                use_color=True,
+                title="VIP COPY production run",
                 subtitle=(
-                    f"validation_stage={self.validation_stage} "
-                    f"concurrency={self.concurrency} out_dir={self.out_dir}"
+                    f"mode=production concurrency={self.concurrency} "
+                    f"table=offline_copy_table out_dir={self.out_dir}"
                 ),
                 total=self.total,
                 completed=completed,
@@ -185,3 +223,22 @@ def _request_id_from_scope(scope: str) -> str:
     if scope.startswith("request "):
         return scope.removeprefix("request ")
     return ""
+
+
+def _record_alias_ids(record: dict[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("request_id", "original_request_id", "node_id"):
+        value = record.get(key)
+        if value is not None:
+            aliases.add(str(value))
+    return aliases
+
+
+def _is_direct_trial_record(record: dict[str, Any]) -> bool:
+    request_id = record.get("request_id")
+    original_request_id = record.get("original_request_id")
+    return request_id is not None and str(request_id) == str(original_request_id)
+
+
+def _is_trial_request_id(request_id: str) -> bool:
+    return request_id.startswith("trial:")

@@ -283,15 +283,31 @@ def compute_copy_candidate_count_p50(all_copy_artifacts: list[dict]) -> float:
     return float(statistics.median(counts)) if counts else 0.0
 
 
-def compute_reflection_trigger_rate(per_request: list[tuple[int, list[str]]]) -> float:
-    """M3b: share of underspecified requests (user_factor_count < 3) that called reflect_*."""
-    underspec = [tools for factor_count, tools in per_request if factor_count < 3]
+def compute_json_completion_when_underspec_rate(
+    per_request: list[tuple[int, bool]],
+) -> float:
+    """M3b: underspecified requests that still produced a JSON artifact."""
+    underspec = [completed for factor_count, completed in per_request if factor_count < 3]
     if not underspec:
         return 1.0
-    triggered = sum(
-        1 for tools in underspec if any(str(tool).startswith("reflect_") for tool in tools)
-    )
-    return triggered / len(underspec)
+    return sum(1 for completed in underspec if completed) / len(underspec)
+
+
+def compute_final_submit_when_underspec_rate(
+    per_request: list[tuple[int, list[str] | bool]],
+) -> float:
+    """Backward-compatible alias for the old M3b metric name.
+
+    Production nodes are now JSON-mode, so an empty tool-call list is normal.
+    Bool values represent explicit JSON artifact completion; legacy list values
+    are treated as completion evidence because the artifact was present when the
+    caller collected the metric.
+    """
+    converted: list[tuple[int, bool]] = []
+    for factor_count, value in per_request:
+        completed = bool(value) if isinstance(value, bool) else True
+        converted.append((factor_count, completed))
+    return compute_json_completion_when_underspec_rate(converted)
 
 
 def compute_delta_diversity(proposals: list[Any]) -> dict[str, int]:
@@ -309,18 +325,27 @@ def compute_belief_update_count(final_portfolio: list[Any]) -> int:
 
 
 def build_behavioral_report(
-    stage_dir: str | Path,
+    batch_dir: str | Path,
     *,
     final_portfolio: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate M1-M5 from a stage directory without calling capture code."""
-    stage_path = Path(stage_dir)
-    request_dirs = _request_dirs_from_index(stage_path)
+    """Aggregate M1-M5 from a production batch directory."""
+    batch_path = Path(batch_dir)
+    request_dirs = _request_dirs_from_index(batch_path)
     user_factor_artifacts: list[dict] = []
     copy_artifacts: list[dict] = []
-    reflection_inputs: list[tuple[int, list[str]]] = []
+    underspec_completion_inputs: list[tuple[int, bool]] = []
     proposals: list[Any] = []
     folded_portfolio: list[Any] = list(final_portfolio or [])
+    if folded_portfolio:
+        proposals = [
+            {
+                "delta_id": _field(row, "delta_id"),
+                "target_skill": _field(row, "target_skill"),
+                "operation": _field(row, "operation"),
+            }
+            for row in folded_portfolio
+        ]
 
     for request_dir in request_dirs:
         user_artifact = _read_json_if_present(
@@ -331,10 +356,7 @@ def build_behavioral_report(
                 {"user_factors": list(user_artifact.get("user_factors") or [])}
             )
             factor_count = len(user_artifact.get("user_factors", []))
-            tools = _tool_names_from_jsonl(
-                request_dir / "evidence/personalized_user_mining/tool_calls.jsonl"
-            )
-            reflection_inputs.append((factor_count, tools))
+            underspec_completion_inputs.append((factor_count, True))
 
         generation_artifact = _read_json_if_present(
             request_dir / "evidence/personalized_copy_generation/artifact.json"
@@ -364,7 +386,7 @@ def build_behavioral_report(
         "user_factor_count_p50": compute_user_factor_count_p50(user_factor_artifacts),
         "user_factor_diversity_score": compute_user_factor_diversity(user_factor_artifacts),
         "copy_candidate_count_p50": compute_copy_candidate_count_p50(copy_artifacts),
-        "reflection_triggered_when_underspec_rate": compute_reflection_trigger_rate(reflection_inputs),
+        "json_completion_when_underspec_rate": compute_json_completion_when_underspec_rate(underspec_completion_inputs),
         "delta_diversity_score": compute_delta_diversity(proposals),
         "trial_belief_update_count": compute_belief_update_count(folded_portfolio),
     }
@@ -395,14 +417,14 @@ def _read_json_if_present(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _request_dirs_from_index(stage_dir: Path) -> list[Path]:
-    index_doc = _read_json_if_present(stage_dir / "index.json")
+def _request_dirs_from_index(batch_dir: Path) -> list[Path]:
+    index_doc = _read_json_if_present(batch_dir / "index.json")
     if not isinstance(index_doc, dict):
-        return [p for p in stage_dir.iterdir() if p.is_dir()] if stage_dir.exists() else []
+        return [p for p in batch_dir.iterdir() if p.is_dir()] if batch_dir.exists() else []
     dirs: list[Path] = []
     for row in index_doc.get("requests", []):
         if isinstance(row, dict) and row.get("node_id"):
-            dirs.append(stage_dir / str(row["node_id"]))
+            dirs.append(batch_dir / str(row["node_id"]))
     return dirs
 
 

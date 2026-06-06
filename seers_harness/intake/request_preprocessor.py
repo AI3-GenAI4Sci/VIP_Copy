@@ -7,7 +7,7 @@ import csv
 import json
 from collections import Counter, OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from seers_harness.intake.categories import TARGET_CATEGORIES, row_category
 from seers_harness.intake.features import (
@@ -29,8 +29,43 @@ def preprocess_request_from_csv(
     cat3_cat1_index: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Read one request from raw CSV and return a workflow-ready scenario dict."""
-
     rows = list(read_request_rows(csv_path, request_id=request_id))
+    return scenario_from_request_rows(
+        request_id=request_id,
+        rows=rows,
+        brand_level_index=brand_level_index,
+        cat3_cat1_index=cat3_cat1_index,
+    )
+
+
+def preprocess_requests_from_csv(
+    csv_path: str | Path,
+    *,
+    request_ids: Sequence[str],
+    brand_level_index: dict[str, str] | None = None,
+    cat3_cat1_index: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Read several requests with one CSV scan and return scenarios by id."""
+    grouped_rows = read_selected_request_rows(csv_path, request_ids=request_ids)
+    return {
+        request_id: scenario_from_request_rows(
+            request_id=request_id,
+            rows=grouped_rows.get(request_id, []),
+            brand_level_index=brand_level_index,
+            cat3_cat1_index=cat3_cat1_index,
+        )
+        for request_id in request_ids
+    }
+
+
+def scenario_from_request_rows(
+    *,
+    request_id: str,
+    rows: list[dict[str, Any]],
+    brand_level_index: dict[str, str] | None = None,
+    cat3_cat1_index: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build a workflow-ready scenario from already selected CSV rows."""
     if not rows:
         raise ValueError(f"request_id not found: {request_id}")
 
@@ -91,9 +126,22 @@ def preprocess_request_from_csv(
 
 
 def read_request_rows(csv_path: str | Path, *, request_id: str) -> list[dict[str, Any]]:
+    return read_selected_request_rows(csv_path, request_ids=[request_id]).get(
+        request_id, []
+    )
+
+
+def read_selected_request_rows(
+    csv_path: str | Path,
+    *,
+    request_ids: Sequence[str],
+) -> dict[str, list[dict[str, Any]]]:
     path = Path(csv_path)
     delimiter = detect_delimiter(path)
-    out: list[dict[str, Any]] = []
+    wanted = {str(request_id) for request_id in request_ids}
+    out: dict[str, list[dict[str, Any]]] = {request_id: [] for request_id in wanted}
+    if not wanted:
+        return out
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f, delimiter=delimiter)
         try:
@@ -105,8 +153,11 @@ def read_request_rows(csv_path: str | Path, *, request_id: str) -> list[dict[str
             if fixed is None:
                 continue
             row = {key: parse_field(key, value) for key, value in zip(header, fixed)}
-            if resolve_first(row, REQUEST_ID_FIELDS) == request_id:
-                out.append({"line_no": line_no, "row": row})
+            row_request_id = resolve_first(row, REQUEST_ID_FIELDS)
+            if row_request_id in wanted:
+                out.setdefault(row_request_id, []).append(
+                    {"line_no": line_no, "row": row}
+                )
     return out
 
 
@@ -141,7 +192,7 @@ def _position(product: dict[str, Any]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Preprocess one SEERS request from a raw CSV.")
+    parser = argparse.ArgumentParser(description="Preprocess one VIP COPY request from a raw CSV.")
     parser.add_argument("--csv", required=True, help="Raw CSV path.")
     parser.add_argument("--request-id", required=True, help="Request id to extract.")
     parser.add_argument("--out", default="-", help="Output JSON path, or '-' for stdout.")

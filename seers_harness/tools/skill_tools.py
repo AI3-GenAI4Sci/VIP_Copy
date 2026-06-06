@@ -1,184 +1,137 @@
-"""Tool handlers for the split personalized-copy workflow.
+"""Production tool handlers for the personalized-copy workflow.
 
 ROLE CLASSIFICATION
-# maintain_user_factors_artifact hand
-# maintain_copy_artifact hand
-# judge_candidate hand
+# submit_user_factors_final hand
+# submit_copy_candidates_final hand
 # submit_judgments_final hand
-# reflect_on_user_factor_coverage mirror
-# reflect_on_copy_quality mirror
-# bash hand
-# read eye
-# glob eye
-# grep eye
-(eye count: 3 — basic workspace projection tools)
+(production tool count: 3)
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from seers_harness.core.errors import ToolValidationError
 from seers_harness.domain.models import (
-    CopyCandidate,
+    CopyGenerationArtifact,
+    PersonalizedCopyRubricArtifact,
     PersonalizedCopyRubricJudgment,
-    UserPersonalizationFactor,
+    UserPersonalizationArtifact,
 )
-from seers_harness.tools.artifact_state import (
-    append_judgment,
-    delete_candidates,
-    delete_user_factors,
-    finalize_copy_artifact,
-    finalize_judgments_artifact,
-    finalize_user_factors_artifact,
-    json_response,
-    read_copy_artifact,
-    read_user_factors_artifact,
-    upsert_candidates,
-    upsert_user_factors,
-    validate_copy_state,
-    validate_user_factor_state,
-)
-from seers_harness.tools.basic_tools import BASIC_TOOL_HANDLERS, BASIC_TOOLS_SPEC
 from seers_harness.tools.skill_tool_specs import (
-    JUDGE_CANDIDATE_SPEC,
-    MAINTAIN_COPY_ARTIFACT_SPEC,
-    MAINTAIN_USER_FACTORS_ARTIFACT_SPEC,
-    REFLECT_ON_COPY_QUALITY_SPEC,
-    REFLECT_ON_USER_FACTOR_COVERAGE_SPEC,
+    SUBMIT_COPY_CANDIDATES_FINAL_SPEC,
     SUBMIT_JUDGMENTS_FINAL_SPEC,
+    SUBMIT_USER_FACTORS_FINAL_SPEC,
     TOOLS_SPEC,
 )
 
 
-ArtifactAction = Literal[
-    "read",
-    "upsert_many",
-    "delete_many",
-    "validate",
-    "save",
-]
-
-
-_REFLECT_USER_FACTOR_COVERAGE = """\
-请在本轮先回答这些问题，再决定是否更新 user factor artifact：
-
-1. 用户因子是否覆盖了主要显性需求、潜在诉求、场景痛点和决策顾虑？
-2. 是否有因子只是画像标签或行为字段改名，而没有形成可复用购买动机？
-3. 是否有多个因子会导向同一个表达 hook，需要合并？
-"""
-
-
-_REFLECT_COPY_QUALITY = """\
-请在本轮先回答这些问题，再决定是否更新 copy artifact：
-
-1. 每条文案是否绑定了一个明确的 user factor 和商品承接点？
-2. 文案是否通过痛点、场景、体验结果或价值感表达商品，而不是重复商品名？
-3. 是否存在动态数字、私有轨迹或商品事实承接不足的表达？
-"""
-
-
-class _MaintainUserFactorsArtifactArgs(BaseModel):
-    action: ArtifactAction
-    user_factors: list[UserPersonalizationFactor] = Field(default_factory=list)
-    user_factor_ids: list[str] = Field(default_factory=list)
-    model_config = {"extra": "forbid"}
-
-
-class _MaintainCopyArtifactArgs(BaseModel):
-    action: ArtifactAction
-    candidates: list[CopyCandidate] = Field(default_factory=list)
-    candidate_ids: list[str] = Field(default_factory=list)
-    product_id: str = ""
-    model_config = {"extra": "forbid"}
-
-
-def maintain_user_factors_artifact(args: dict, state: dict) -> str:
-    """Maintain user-side personalization factor artifact state."""
+def submit_user_factors_final(args: dict, state: dict) -> str:
+    """Validate and finalize the user personalization artifact."""
     try:
-        parsed = _MaintainUserFactorsArtifactArgs.model_validate(args)
+        artifact = UserPersonalizationArtifact.model_validate(args)
     except ValidationError as exc:
         raise ToolValidationError(
-            message=f"maintain_user_factors_artifact args invalid: {exc.errors()[:3]}",
-            tool_name="maintain_user_factors_artifact",
+            message=f"UserPersonalizationArtifact schema invalid: {exc.errors()[:3]}",
+            tool_name="submit_user_factors_final",
         ) from exc
-
-    if parsed.action == "read":
-        return json_response(read_user_factors_artifact(state))
-    if parsed.action == "validate":
-        validate_user_factor_state(state)
-        return "valid"
-    if parsed.action == "save":
-        finalize_user_factors_artifact(state)
-        return "saved"
-
-    if parsed.action == "upsert_many":
-        upsert_user_factors(state, parsed.user_factors)
-        return "updated"
-    if parsed.action == "delete_many":
-        delete_user_factors(state, parsed.user_factor_ids)
-        return "updated"
-    raise AssertionError(f"unhandled action: {parsed.action}")
+    state["final_artifact"] = artifact.model_dump()
+    return "finalized"
 
 
-def maintain_copy_artifact(args: dict, state: dict) -> str:
-    """Maintain copy candidate artifact state."""
+def submit_copy_candidates_final(args: dict, state: dict) -> str:
+    """Validate and finalize the generated copy artifact."""
     try:
-        parsed = _MaintainCopyArtifactArgs.model_validate(args)
+        artifact = CopyGenerationArtifact.model_validate(args)
     except ValidationError as exc:
         raise ToolValidationError(
-            message=f"maintain_copy_artifact args invalid: {exc.errors()[:3]}",
-            tool_name="maintain_copy_artifact",
+            message=f"CopyGenerationArtifact schema invalid: {exc.errors()[:3]}",
+            tool_name="submit_copy_candidates_final",
         ) from exc
-
-    if parsed.action == "read":
-        return json_response(read_copy_artifact(state))
-    if parsed.action == "validate":
-        validate_copy_state(state)
-        return "valid"
-    if parsed.action == "save":
-        finalize_copy_artifact(state)
-        return "saved"
-
-    if parsed.action == "upsert_many":
-        upsert_candidates(state, parsed.candidates)
-        return "updated"
-    if parsed.action == "delete_many":
-        delete_candidates(state, parsed.candidate_ids)
-        return "updated"
-    raise AssertionError(f"unhandled action: {parsed.action}")
-
-
-def reflect_on_user_factor_coverage(args: dict, state: dict) -> str:
-    """Return user-factor coverage reflection questions."""
-    return _REFLECT_USER_FACTOR_COVERAGE
-
-
-def reflect_on_copy_quality(args: dict, state: dict) -> str:
-    """Return copy quality reflection questions."""
-    return _REFLECT_COPY_QUALITY
-
-
-def judge_candidate(args: dict, state: dict) -> str:
-    """Validate and append one scored rubric judgment."""
-    append_judgment(state, args)
-    return "recorded"
+    state["final_artifact"] = artifact.model_dump()
+    return "finalized"
 
 
 def submit_judgments_final(args: dict, state: dict) -> str:
     """Validate and finalize the rubric artifact."""
-    finalize_judgments_artifact(args, state)
+    _reject_model_submitted_decision(args)
+    try:
+        artifact = PersonalizedCopyRubricArtifact.model_validate(args)
+    except ValidationError as exc:
+        raise ToolValidationError(
+            message=f"PersonalizedCopyRubricArtifact schema invalid: {exc.errors()[:3]}",
+            tool_name="submit_judgments_final",
+        ) from exc
+    for judgment in artifact.judgments:
+        _validate_judgment_candidate_reference(judgment, state)
+    state["final_artifact"] = artifact.model_dump()
     return "finalized"
 
 
+def _reject_model_submitted_decision(args: dict) -> None:
+    judgments = args.get("judgments") if isinstance(args, dict) else None
+    if not isinstance(judgments, list):
+        return
+    for index, judgment in enumerate(judgments):
+        if isinstance(judgment, dict) and "decision" in judgment:
+            raise ToolValidationError(
+                message=(
+                    "submit_judgments_final input must not include decision; "
+                    "the harness derives admit/hold/reject from objective checks "
+                    "and total_score"
+                ),
+                tool_name="submit_judgments_final",
+                arg_path=f"judgments.{index}.decision",
+            )
+
+
+def _validate_judgment_candidate_reference(
+    judgment: PersonalizedCopyRubricJudgment,
+    state: dict[str, Any],
+) -> None:
+    payload = state.get("payload") or {}
+    candidates = payload.get("candidates") if isinstance(payload, dict) else None
+    if not candidates:
+        return
+    text_by_id = {
+        candidate.get("candidate_id"): candidate.get("copy_text", "")
+        for candidate in candidates
+        if isinstance(candidate, dict)
+    }
+    candidate_text = text_by_id.get(judgment.candidate_id, "")
+    if judgment.candidate_id not in text_by_id:
+        raise ToolValidationError(
+            message=(
+                f"candidate_id {judgment.candidate_id!r} not present in "
+                "payload['candidates']"
+            ),
+            tool_name="submit_judgments_final",
+            arg_path="candidate_id",
+        )
+    if judgment.copy_text and judgment.copy_text != candidate_text:
+        raise ToolValidationError(
+            message="copy_text must exactly match the candidate text for candidate_id",
+            tool_name="submit_judgments_final",
+            arg_path="copy_text",
+        )
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict, dict], str]] = {
-    "maintain_user_factors_artifact": maintain_user_factors_artifact,
-    "maintain_copy_artifact": maintain_copy_artifact,
-    "judge_candidate": judge_candidate,
+    "submit_user_factors_final": submit_user_factors_final,
+    "submit_copy_candidates_final": submit_copy_candidates_final,
     "submit_judgments_final": submit_judgments_final,
-    "reflect_on_user_factor_coverage": reflect_on_user_factor_coverage,
-    "reflect_on_copy_quality": reflect_on_copy_quality,
-    **BASIC_TOOL_HANDLERS,
 }
+
+
+__all__ = [
+    "SUBMIT_COPY_CANDIDATES_FINAL_SPEC",
+    "SUBMIT_JUDGMENTS_FINAL_SPEC",
+    "SUBMIT_USER_FACTORS_FINAL_SPEC",
+    "TOOLS_SPEC",
+    "TOOL_HANDLERS",
+    "submit_user_factors_final",
+    "submit_copy_candidates_final",
+    "submit_judgments_final",
+]

@@ -1,36 +1,28 @@
-"""D-19 trial-failure routing classifier — Phase 7 plan 07-04.
+"""Request-failure classifier for production batches.
 
-The Phase 7 stage runner consumes ``classify(exc)`` to route exceptions
-into one of three labels per D-19:
+The production batch runner consumes ``classify(exc)`` to route exceptions into
+one of three labels:
 
-* ``"trial_failure"`` — the exception originated inside a trial wrapper
-  (the ``run_request_trial`` hook from 07-01 already recorded the
-  outcome via the ``trial_failed`` event) and the host request must
-  continue on the unmodified main path. Schema / tool-protocol failures
-  inside a trial still bubble up here only when the caller chose to
-  re-raise them; in 07-04 the trial_runner returns a ``TrialOutcome``
-  with ``success=False`` instead of raising, so this branch is the seam
-  07-06 will extend when full evolution wiring lands. No code in 07-04
-  raises ``TrialFailure``; the sentinel exists so 07-06 can attach a
-  trial-context envelope without changing the classifier surface.
+* ``"trial_failure"`` — the exception originated inside a production-slot
+  delta trial after the runner had already recorded a ``trial_failed``
+  event. The host batch continues because the failed artifact belongs to
+  the temporary patched skill surface, not to normal traffic.
 * ``"provider_error"`` — HTTP / API errors from the OpenAI-compatible
-  client: rate limit, auth, transient, response. Per D-02 the stage
-  runner fails fast at request level on these (the SDK-level resilience
-  budget owned by ``OpenAICompatibleProvider`` per D-03 has already
-  been exhausted by the time the exception bubbles up).
+  client: rate limit, auth, transient, response. The runner records the
+  request failure, continues the batch, and lets the final request-rerun pass
+  decide whether it recovers.
 * ``"infra_error"`` — anything else (``KeyError``, ``AttributeError``,
   ``FileNotFoundError``, ``ValueError``, schema-validation, tool-
-  validation, etc.). Per D-02 the stage runner fails fast at request
-  level. The default fallback is ``"infra_error"`` — the classifier
-  never silently absorbs an unknown exception class.
+  validation, etc.). The runner records the request failure, continues the
+  batch, and includes unresolved failures in ``failed_requests.json``.
 
-Routing summary (consumer side, 07-04 stage runner):
+Routing summary:
 
     label             ┃ runner action
     ━━━━━━━━━━━━━━━━━━┃━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     "trial_failure"   ┃ record on the request row, host continues
-    "provider_error"  ┃ fail-fast (stage stops, exit non-zero)
-    "infra_error"     ┃ fail-fast (stage stops, exit non-zero)
+    "provider_error"  ┃ record request failure, rerun at batch end
+    "infra_error"     ┃ record request failure, rerun at batch end
 
 The classifier inspects exception class only — never the message
 string, never the call site. Type-based classification matches the
@@ -59,26 +51,17 @@ from seers_harness.core.errors import (
     ProviderRateLimitError,
     ProviderResponseError,
     ProviderTransientError,
+    SchemaValidationHarnessError,
 )
 
 
 # ---------------------------------------------------------------------------
-# Sentinel exception for trial-context failures (07-06 extension point)
+# Sentinel exception for trial-context failures
 # ---------------------------------------------------------------------------
 
 
 class TrialFailure(Exception):
-    """Sentinel exception class — wraps a trial-context failure.
-
-    07-04 itself never raises ``TrialFailure``: ``run_request_trial``
-    (07-01) records failures via the ``TrialOutcome`` return contract
-    rather than raising. 07-06's full evolution wiring may choose to
-    wrap selected trial-context exceptions in this envelope before
-    surfacing them to the stage runner. Defining the sentinel here
-    keeps the classifier surface stable across both phases — 07-06 can
-    extend behaviour without changing the classifier's three-label
-    contract or the stage runner's switch on ``classify(exc)``.
-    """
+    """Sentinel exception class for patched-skill trial failures."""
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +78,12 @@ _PROVIDER_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
     ProviderTransientError,
     ProviderAuthError,
     ProviderResponseError,
+)
+
+_REQUEST_OUTPUT_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
+    BusinessOutputError,
+    SchemaValidationHarnessError,
+    _PydanticValidationError,
 )
 
 
@@ -116,6 +105,7 @@ _FAILURE_CLASS_DISPATCH: tuple[tuple[type[BaseException], FailureClass], ...] = 
     (ProviderTransientError, "transient"),
     (ProviderResponseError, "malformed_tool_args"),
     (BusinessOutputError, "business_output"),
+    (SchemaValidationHarnessError, "schema_violation"),
     (_PydanticValidationError, "schema_violation"),
 )
 
@@ -128,7 +118,7 @@ _FAILURE_CLASS_DISPATCH: tuple[tuple[type[BaseException], FailureClass], ...] = 
 def classify(
     exc: BaseException,
 ) -> Literal["trial_failure", "provider_error", "infra_error"]:
-    """Route ``exc`` into one of three D-19 labels.
+    """Route ``exc`` into one of three request-failure labels.
 
     See the module docstring for full label semantics. The function
     walks the ``__cause__`` / ``__context__`` chain so wrapped
@@ -153,7 +143,7 @@ def failure_class(exc: BaseException | None) -> FailureClass:
     """Return the seven-label D8-E outcome class for analytics rows.
 
     This function is intentionally independent from ``classify``:
-    ``classify`` owns the D-19 three-label fail-fast routing contract,
+    ``classify`` owns the three-label request routing contract,
     while ``failure_class`` owns the operator-facing aggregation label.
     Classification is type-only and walks ``__cause__`` / ``__context__``
     so wrapped provider/schema errors keep their upstream class.
@@ -174,9 +164,26 @@ def failure_class(exc: BaseException | None) -> FailureClass:
 def is_trial_failure(exc: BaseException) -> bool:
     """``True`` iff ``classify(exc) == "trial_failure"``.
 
-    Convenience predicate for the stage runner's per-request loop:
-    the runner records the trial outcome on the request row and
-    continues to the next request on ``True``; otherwise it fails
-    fast at request level (D-02).
+    Convenience predicate for the batch runner's per-request loop: the runner
+    records the trial outcome on the request row and continues to the next
+    request on ``True``.
     """
     return classify(exc) == "trial_failure"
+
+
+def is_request_output_failure(exc: BaseException) -> bool:
+    """True when node retries are exhausted by invalid model output.
+
+    These failures are request-local: malformed JSON content, schema
+    violations, or deterministic business gates such as empty candidates.
+    Provider and infrastructure errors are recorded as request failures and
+    rerun at the end of the batch.
+    """
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, _REQUEST_OUTPUT_EXCEPTION_TYPES):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False

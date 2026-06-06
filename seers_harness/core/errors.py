@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -10,6 +11,8 @@ class HarnessError(Exception):
     message: str
     category: str = "unknown"
     retryable: bool = False
+    raw_artifact: Any | None = field(default=None, repr=False)
+    summary: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __str__(self) -> str:
         return self.message
@@ -40,8 +43,20 @@ class ProviderAuthError(ProviderCallError):
 
 
 class SchemaValidationHarnessError(HarnessError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message=message, category="schema_validation", retryable=True)
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_artifact: Any | None = None,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            category="schema_validation",
+            retryable=True,
+            raw_artifact=raw_artifact,
+            summary=dict(summary or {}),
+        )
 
 
 class ToolValidationError(HarnessError):
@@ -90,9 +105,9 @@ def infer_category(exc: Exception) -> str:
         or "payment required" in text
     ):
         return "auth"
-    if any(term in name for term in ("timeout", "connection", "apierror")):
+    if any(term in name for term in ("timeout", "deadline", "connection", "protocol", "apierror")):
         return "transient_provider"
-    if any(term in text for term in ("timeout", "connection reset", "temporarily unavailable", "502", "503", "504")):
+    if any(term in text for term in ("timeout", "deadline", "connection reset", "peer closed", "chunked read", "temporarily unavailable", "502", "503", "504")):
         return "transient_provider"
     if "json" in name or "jsondecode" in name:
         return "provider_response"

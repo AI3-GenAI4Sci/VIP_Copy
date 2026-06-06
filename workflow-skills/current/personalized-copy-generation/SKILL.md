@@ -1,6 +1,7 @@
 ---
 name: personalized-copy-generation
 description: Use when generating ecommerce recommendation copy from user personalization factors, product facts, list context, and stable product-user relations.
+allowed-tools: none
 ---
 
 # 个性化文案生成
@@ -26,7 +27,7 @@ description: Use when generating ecommerce recommendation copy from user persona
 - `source_user_factor_id`：来源用户因子。
 - `text`：可见文案。
 - `commercial_angle`：主要转化抓手，用自由短语描述。
-- `product_binding`：商品如何承接用户因子。
+- `product_binding`：商品如何承接用户因子，并注明文案中露出的差异化商品属性及选取理由。
 - `fact_binding`：文案依赖的稳定商品事实或关系事实。
 
 ## 方法
@@ -38,22 +39,59 @@ description: Use when generating ecommerce recommendation copy from user persona
 1. **选择用户因子。** 从 `need_or_pain`、`scene_trigger`、`buying_heuristic`、`expression_hooks` 中找最适合该商品承接的入口。
 2. **盘点商品承接。** 用商品标题、属性、类目、品牌、口碑、价格位置、活动感和 derived relation 判断商品能承接什么。
 3. **确定商业角度。** 常见角度包括痛点前置、场景代入、体验结果、价值感、口碑背书、品牌信任、低门槛尝试。
-4. **写短文案。** 中文推荐卡短文案默认不超过 16 个可见中文字符或标点；如果运行任务要求标题式或长短标题组合，按运行任务约束执行。文案应通过痛点、场景、体验结果或价值感表达商品，避免重复商品名。
-5. **绑定证据。** 在 `product_binding` 和 `fact_binding` 中写清商品承接和事实来源。
+4. **写短文案。** 中文推荐卡短文案大约在 10 ～16 个可见中文字符或标点；如果运行任务要求标题式或长短标题组合，按运行任务约束执行。文案应通过痛点、场景、体验结果或价值感表达商品，避免重复商品名。**每条文案必须露出至少一项区别于类目名的差异化商品属性**，属性须从 `target_products` 或 `derived_features_by_product` 中选取，并强化该文案的商业角度。可接受的属性类型包括：
+   - **品牌层级**（如 `brand_level`、品牌知名度或品牌触达信号）
+   - **容量/规格**（如克重、毫升数、片数等形体信息）
+   - **香调特征**（适用于香水、个护等气味相关品类）
+   - **持久度**（如防晒时长、持妆时间、留香时长等）
+   - **场景适配**（如通勤、户外、运动、熬夜等使用场景）
+   - **满意度信号**（如 `item_satisfy`、`review_cnt`、`review_band`、口碑档位等）
+   - 若无法从可用事实中可信地露出任何差异化属性，不要提交该 candidate。
+   可见文案只做定性表达，例如“高口碑”“好评口碑”“口碑款”；不要写具体好评数、评分、百分比、销量、金额、库存、倒计时或折扣数字。
+5. **绑定证据。** 在 `product_binding` 中写清商品承接路径，并**明确命名**本条文案露出了哪项差异化属性、为什么选用该属性。在 `fact_binding` 中写清文案依赖的稳定商品事实或关系事实。
 
-## 工具流程
+## 可用工具
 
-1. 用 `maintain_copy_artifact(action="read")` 查看已有 candidates。
-2. 用 `upsert_many`、`delete_many` 维护候选文案。
-3. 需要检查质量时调用 `reflect_on_copy_quality`，回答后继续更新。
-4. 完成后调用 `maintain_copy_artifact(action="validate")`。
-5. validate 返回 `valid` 后，下一次工具调用必须是 `maintain_copy_artifact(action="save")`。
+无。本节点在 DeepSeek JSON mode 下运行，不允许调用、请求或暗示任何工具。
+
+## JSON 输出
+
+先在内部完成商品承接判断，不要在思考或草稿中展开 JSON 片段。最终只输出一个完整合法 JSON object，不输出 Markdown、解释文本、自然语言前后缀或工具调用。
+
+根对象只能包含 `candidates` 一个字段。`candidates` 是对象数组，字段形状如下：
+
+```json
+{
+  "candidates": [
+    {
+      "candidate_id": "C_001",
+      "product_id": "6921486989702679511",
+      "source_user_factor_id": "UF_001",
+      "text": "急救补水一支搞定......",
+      "commercial_angle": "功效护肤 + 低决策成本......",
+      "product_binding": "用次抛精华、玻尿酸、套组规格承接补水淡纹诉求；......",
+      "fact_binding": "商品标题含补水保湿、淡纹、次抛精华等稳定事实；......"
+    }
+  ]
+}
+```
+
+类型约束适用于整个 JSON，而不是只适用于示例：每个 candidate 字段都必须是字符串；不要把 candidate 写成自然语言段落、数组里的字符串、或额外嵌套对象。
+
+## 数量要求
+
+1. 在脑内为每个 target product 选择可承接的 user factor 和商品事实。
+2. 每个 target product 至少输出 1 条 candidate；商品事实足够时可输出 2-3 条不同商业角度。
+3. 每条 candidate 的 `product_id` 必须来自输入商品，`source_user_factor_id` 必须来自输入 `user_factors`。
+4. 每个 `candidate_id` 在同一 JSON artifact 内唯一。
+5. 如果某个商品没有可信商品事实或没有可承接用户因子，不要为该商品编造 candidate；harness 会校验结构并重试。
 
 ## 工程硬门
 
 - 每条 copy 必须有有效 `source_user_factor_id`、`product_id`、`product_binding` 和 `fact_binding`。
+- **每条 copy 的 `product_binding` 必须注明露出的差异化商品属性及选取理由；无可用属性不要提交该 candidate。**
 - 可见文案不得重复商品名、品牌名或同一商品关键词。
-- 具体金额、折扣、库存、倒计时等动态事实不写入可见文案，用定性活动感或价值感承接。
+- 动态事实和具体数值不写入可见文案，包括金额、折扣、库存、倒计时、销量、好评数、评分和百分比；用定性活动感、价值感或口碑感承接。
 - id 原样保留。
 - 输出使用输入语言；中文输入产出中文文案。
 
@@ -67,15 +105,21 @@ description: Use when generating ecommerce recommendation copy from user persona
   - 把沐浴露体验放进下班后的情绪场景，商品体验可见。
 - `牙龈敏感必入！刷完超清爽`
   - 痛点前置，使用后结果直接，适合口腔护理类商品。
+- `国货高倍防晒！轻薄不黏腻`（露出品牌层级"国货" + 防晒力"高倍"）
+  - 品牌层级属性强化信任感，防晒力属性承接痛点，两者均来自商品事实。
+- `高口碑通勤防晒！一支搞定`（露出满意度信号"高口碑" + 场景适配"通勤"）
+  - review_cnt 或 review_band 只在 `product_binding` / `fact_binding` 中说明；可见文案用定性口碑背书，场景适配让用户立刻代入日常使用。
 
 反例：
 
 - `品质好更健康`
-  - 泛化，缺少用户动机和商品承接点。
+  - 泛化，缺少用户动机和商品承接点，无任何差异化属性露出。
 - `白金会员专属推荐`
-  - 身份标签明显，但购买理由不足。
+  - 身份标签明显，但购买理由不足，无商品属性承接。
 - `这款商品很适合你`
-  - 解释推荐关系，没有形成场景、痛点、体验或购买理由。
+  - 解释推荐关系，没有形成场景、痛点、体验或购买理由，无属性露出。
+- `防晒霜就选它！好用到哭`
+  - 仅重复类目名，无品牌层级/规格/场景/口碑等任何差异化属性，不可接受。
 
 ## 输出
 

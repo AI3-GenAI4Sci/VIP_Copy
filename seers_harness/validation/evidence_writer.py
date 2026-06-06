@@ -1,10 +1,9 @@
-"""Per-node JSONL evidence writer — Phase 7 plan 07-02 (D-22b).
+"""Per-node JSONL evidence writer.
 
 Flushes the captured ``request_log`` produced by
 :class:`seers_harness.validation.recording_provider.RecordingProvider`
-to disk in the canonical per-node layout that every downstream
-validator (07-03 batch index, 07-04 stage runner, case-analysis read)
-depends on.
+to disk in the canonical per-node layout that every downstream validator
+(batch index, batch summary, case-analysis readers) depends on.
 
 Per-record output layout::
 
@@ -38,10 +37,10 @@ Per D-22b:
   ``first`` / ``last`` turn snapshots. This prevents later submit/reflection
   turns from overwriting the first-turn prompt evidence.
 
-Per D-22b the writer is best-effort post-mortem: a single malformed
-record logs to ``stderr`` and continues, because the stage runner has
-already failed-fast at request level (D-02). Files are written once
-per flush; no append-mode is needed.
+The writer is best-effort post-mortem: a single malformed record logs to
+``stderr`` and continues, because the batch runner has already made the
+request-level routing decision. Files are written once per flush; no
+append-mode is needed.
 
 JSON style follows the workspace pattern from
 ``seers_harness/evolution/promotion_smoke.py``: ``indent=2`` for
@@ -73,10 +72,8 @@ def flush_evidence(request_log: list[dict], out_dir: str | Path) -> None:
         try:
             _flush_node(evidence, base)
         except Exception:
-            # Best-effort post-mortem (D-22b): print to stderr and
-            # continue. The stage runner already failed-fast at request
-            # level (D-02), so a write failure here must not eclipse
-            # the genuine evidence on disk.
+            # Best-effort post-mortem: print to stderr and continue. A
+            # write failure here must not eclipse the genuine request error.
             first_record = evidence.records[0] if evidence.records else {}
             sys.stderr.write(
                 f"[evidence_writer] failed to flush record "

@@ -2,15 +2,15 @@
 
 A content-neutral wrapper around
 ``seers_harness.provider_runtime.openai_compatible.OpenAICompatibleProvider``.
-The wrapper captures each ``generate_with_tools`` invocation into a
+The wrapper captures each ``generate_json`` / ``generate_with_tools`` invocation into a
 ``request_log`` list (one record per call) and otherwise behaves
 identically to the inner provider — same return value, same exceptions,
 same surface (unknown attributes are forwarded via ``__getattr__``).
 
 Per D-08 the proxy is content-neutral: it does not interpret messages,
 does not retry, does not classify errors, and does not swallow
-exceptions — those are upstream concerns. There is **no** ``try``/
-``except`` around the inner provider call inside the override.
+exceptions — those are upstream concerns. It records successful calls and
+partial failure evidence, then re-raises the original exception.
 
 The captured record shape is the input to the per-node JSONL writer in
 ``seers_harness.validation.evidence_writer`` (D-22b):
@@ -29,7 +29,7 @@ The captured record shape is the input to the per-node JSONL writer in
 
 ``set_current_node_id`` (and its sibling ``get_current_node_id``)
 back the per-call ``node_id`` stamping with a
-``contextvars.ContextVar`` so the stage runner can scope a node
+``contextvars.ContextVar`` so the batch runner can scope a node
 without threading the id through every call.
 """
 
@@ -38,9 +38,12 @@ from __future__ import annotations
 import contextvars
 from typing import Any
 
-from seers_harness.provider_runtime.capture import build_capture_record
+from seers_harness.provider_runtime.capture import (
+    build_capture_record,
+    build_failure_capture_record,
+)
 
-# ContextVar so the stage runner (07-04) can stamp records with the
+# ContextVar so the batch runner can stamp records with the
 # current node_id without threading the id through every call. The
 # inner provider already accepts ``node_id`` as a keyword argument; when
 # both are present, the kwarg wins. The contextvar is the fallback.
@@ -57,7 +60,7 @@ def set_current_node_id(node_id: str | None) -> contextvars.Token:
     callers may revert via :py:meth:`ContextVar.reset` once the node
     boundary closes.
 
-    IN-05 note — the stage runner currently both calls this and also
+    IN-05 note — the batch runner currently both calls this and also
     passes ``node_id`` as a kwarg to ``generate_with_tools``. When both
     are present, the kwarg wins (see :py:meth:`RecordingProvider.generate_with_tools`).
     The ContextVar fallback exists for callers that drive the provider
@@ -88,10 +91,11 @@ class RecordingProvider:
     """Content-neutral recording proxy around ``OpenAICompatibleProvider``.
 
     Composition, not inheritance, per D-08. The wrapper appends one
-    fully populated record to ``request_log`` per
-    ``generate_with_tools`` call, then returns the inner provider's
+    fully populated record to ``request_log`` per provider call, then
+    returns the inner provider's
     :class:`~seers_harness.provider_runtime.base.ProviderResult`
-    unchanged. Exceptions from the inner call propagate unchanged.
+    unchanged. Exceptions from the inner call are captured as partial
+    evidence and propagate unchanged.
 
     Unknown attributes are forwarded to ``inner`` via :py:meth:`__getattr__`,
     so callers see the inner provider's full surface (``last_usage``,
@@ -120,22 +124,63 @@ class RecordingProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> Any:
-        # NO try/except here (D-08): exceptions propagate unchanged so
-        # the stage runner can fail-fast (D-02) on schema/protocol
-        # errors and route transient/rate-limit errors per D-19.
-        result = self.inner.generate_with_tools(
-            node_id=node_id,
-            skill_bundle=skill_bundle,
-            messages=messages,
-            tools=tools,
-        )
-
         # Resolve node_id: prefer the kwarg the harness passes; fall
-        # back to the contextvar so stage runners that drive the
+        # back to the contextvar so batch callers that drive the
         # provider through wrapper code without the kwarg still get
         # stamped records.
         resolved_node_id = node_id if node_id is not None else _current_node_id.get()
+        try:
+            result = self.inner.generate_with_tools(
+                node_id=node_id,
+                skill_bundle=skill_bundle,
+                messages=messages,
+                tools=tools,
+            )
+        except Exception as exc:
+            self.request_log.append(
+                build_failure_capture_record(
+                    inner=self.inner,
+                    exc=exc,
+                    node_id=resolved_node_id,
+                    messages=messages,
+                )
+            )
+            raise
 
+        self.request_log.append(
+            build_capture_record(
+                inner=self.inner,
+                result=result,
+                node_id=resolved_node_id,
+                messages=messages,
+            )
+        )
+        return result
+
+    def generate_json(
+        self,
+        *,
+        node_id: str,
+        skill_bundle: str,
+        messages: list[dict[str, Any]],
+    ) -> Any:
+        resolved_node_id = node_id if node_id is not None else _current_node_id.get()
+        try:
+            result = self.inner.generate_json(
+                node_id=node_id,
+                skill_bundle=skill_bundle,
+                messages=messages,
+            )
+        except Exception as exc:
+            self.request_log.append(
+                build_failure_capture_record(
+                    inner=self.inner,
+                    exc=exc,
+                    node_id=resolved_node_id,
+                    messages=messages,
+                )
+            )
+            raise
         self.request_log.append(
             build_capture_record(
                 inner=self.inner,

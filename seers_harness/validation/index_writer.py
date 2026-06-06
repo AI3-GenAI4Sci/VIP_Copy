@@ -1,14 +1,12 @@
-"""index.json writer — Phase 7 plan 07-03 (D-10, D-12, D-16, D-22d).
+"""Production batch ``index.json`` writer.
 
-Materialises one ``index.json`` file per stage run with one row per
+Materialises one ``index.json`` file per production batch with one row per
 submitted request. The schema is the canonical machine-readable navigation
-surface for VAL-01..VAL-04 verdicts and the four D-16 sortable
-extreme-sample dimensions.
+surface for VAL-01..VAL-04 verdicts and sortable extreme-sample dimensions.
 
-Top-level keys (per D-22d):
+Top-level keys:
 
     {
-      "stage": 1 | 2 | 3,
       "batch_id": str,
       "started_at": str,             # ISO-8601 UTC
       "finished_at": str,            # ISO-8601 UTC
@@ -34,12 +32,12 @@ Plus the four VAL booleans and the per-request flags:
     VAL-03_pass                                         # null — manual review only (D-13/D-14)
     reflow_triggered                                    # bool — D-12 reflow attribution
     trial_selected_delta_id                             # str|null — D-10 trial-selection visibility
-    exception                                           # str|null — passthrough for fail-fast scenes
+    exception                                           # str|null — request failure reason when unresolved
 
 Per D-22(d) this writer is part of the *writer layer* and does not
 import or instrument the capture layer. It consumes only:
 
-    * the records list the stage runner builds (each carrying a parsed
+    * the records list the production batch runner builds (each carrying a parsed
       ``artifact`` dict already loaded from disk by the runner via the
       per-node layout from 07-02), and
     * the pure column extractors / VAL judges from
@@ -72,7 +70,6 @@ from seers_harness.validation.machine_judges import (
 def write_index(
     records: list[dict],
     out_dir: str | Path,
-    stage: int,
     batch_id: str,
     started_at: str,
     finished_at: str,
@@ -81,7 +78,7 @@ def write_index(
 ) -> None:
     """Write ``index.json`` to ``out_dir / 'index.json'``.
 
-    ``records`` is the list of per-request dicts the stage runner built,
+    ``records`` is the list of per-request dicts the batch runner built,
     in submission order. Each record SHOULD carry at least:
 
         {
@@ -89,7 +86,7 @@ def write_index(
             "artifact": dict | None,                # parsed final artifact
             "reflow_triggered": bool,               # D-12
             "trial_selected_delta_id": str | None,  # D-10
-            "exception": str | None,                # fail-fast passthrough
+            "exception": str | None,                # request failure reason when unresolved
         }
 
     Missing keys are tolerated — the writer fills with safe defaults so
@@ -100,6 +97,7 @@ def write_index(
     rows: list[dict[str, Any]] = []
     for record in records:
         artifact = record.get("artifact") if isinstance(record, dict) else None
+        record_kind = _record_kind(record)
 
         # Run the three machine-judged VAL checks. Each returns
         # (bool, reason_str); we keep only the bool here — the reason
@@ -113,6 +111,9 @@ def write_index(
         # the raw text passthrough is fidelity, NOT an E-dimension.
         row: dict[str, Any] = {
             "node_id": _safe_str(record, "node_id"),
+            "request_id": _safe_str(record, "request_id"),
+            "original_request_id": _safe_str(record, "original_request_id"),
+            "record_kind": record_kind,
             # E1 — sort desc — most user_factor_ids
             "len_user_factor_ids": extract_len_user_factor_ids(artifact),
             # E2 (asc, shortest) AND E3 (desc, longest) — same column
@@ -134,21 +135,24 @@ def write_index(
                 record.get("trial_selected_delta_id") if isinstance(record, dict) else None
             ),
             # Fail-fast passthrough — exception class/message string the
-            # stage runner attaches when a request terminates abnormally.
+            # batch runner attaches when a request terminates abnormally.
             "exception": record.get("exception") if isinstance(record, dict) else None,
             "failure_class": (
                 record.get("failure_class", "ok") if isinstance(record, dict) else "ok"
             ),
+            "skipped": bool(record.get("skipped")) if isinstance(record, dict) else False,
         }
         rows.append(row)
 
     index_doc: dict[str, Any] = {
-        "stage": stage,
         "batch_id": batch_id,
         "started_at": started_at,
         "finished_at": finished_at,
         "n": n,
         "concurrency": concurrency,
+        "record_count": len(rows),
+        "production_n": sum(1 for row in rows if row.get("record_kind") == "production"),
+        "trial_n": sum(1 for row in rows if row.get("record_kind") == "trial"),
         "requests": rows,
     }
 
@@ -167,3 +171,14 @@ def _safe_str(record: Any, key: str) -> str:
     if val is None:
         return ""
     return str(val)
+
+
+def _record_kind(record: Any) -> str:
+    if not isinstance(record, dict):
+        return "production"
+    raw = record.get("record_kind")
+    if raw in {"production", "trial"}:
+        return str(raw)
+    if record.get("trial_selected_delta_id"):
+        return "trial"
+    return "production"

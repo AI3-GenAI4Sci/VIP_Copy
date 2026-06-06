@@ -8,9 +8,11 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
+from seers_harness.agentic.json_mode import run_skill_via_json
 from seers_harness.agentic.tool_loop import run_skill_via_tools
 from seers_harness.core.errors import BusinessOutputError, SchemaValidationHarnessError
 from seers_harness.tools.skill_tools import TOOL_HANDLERS, TOOLS_SPEC
+from seers_harness.validation.artifact_checks import validate_artifact_against_payload
 from seers_harness.workflow.payloads import provider_payload_for_node
 from seers_harness.workflow.skill_loader import load_skill_prose
 
@@ -37,6 +39,15 @@ class NodeAttemptResult:
     record: dict[str, Any]
 
 
+_PRODUCTION_JSON_SKILLS: frozenset[str] = frozenset(
+    {
+        "personalized-user-mining",
+        "personalized-copy-generation",
+        "personalized-copy-rubric-judge",
+    }
+)
+
+
 def run_node_attempt(
     *,
     config: NodeAttemptConfig,
@@ -55,37 +66,61 @@ def run_node_attempt(
         skill_bundle = loader(config.skill_name)
     else:
         skill_bundle = loader(config.skill_name, skill_root=config.skill_root)
-    tools_spec = config.tools_spec or TOOLS_SPEC
-    tool_handlers = config.tool_handlers or TOOL_HANDLERS
-    result = run_skill_via_tools(
-        skill_name=config.skill_name,
-        skill_bundle=skill_bundle,
-        payload=base_payload.get("scenario") or base_payload,
-        tools_spec=tools_spec[config.skill_name],
-        tool_handlers=tool_handlers,
-        provider=provider,
-        node_id=config.node_id,
-    )
-    summary = {
-        "type": "tool_loop_summary",
-        "node_id": config.node_id,
-        "session_id": config.session_id,
-        "turns_used": result.turns_used,
-        "tool_calls_made": result.tool_calls_made,
-        "last_reasoning_content": result.last_reasoning_content,
-        "usage": result.usage,
-    }
+    payload = base_payload.get("scenario") or base_payload
+    if config.skill_name in _PRODUCTION_JSON_SKILLS:
+        result = run_skill_via_json(
+            skill_bundle=skill_bundle,
+            payload=payload,
+            provider=provider,
+            node_id=config.node_id,
+        )
+        summary = {
+            "type": "tool_loop_summary",
+            "mode": "json",
+            "node_id": config.node_id,
+            "session_id": config.session_id,
+            "turns_used": 1,
+            "tool_calls_made": 0,
+            "last_reasoning_content": result.reasoning_content,
+            "usage": result.usage,
+        }
+    else:
+        tools_spec = config.tools_spec or TOOLS_SPEC
+        tool_handlers = config.tool_handlers or TOOL_HANDLERS
+        result = run_skill_via_tools(
+            skill_name=config.skill_name,
+            skill_bundle=skill_bundle,
+            payload=payload,
+            tools_spec=tools_spec[config.skill_name],
+            tool_handlers=tool_handlers,
+            provider=provider,
+            node_id=config.node_id,
+        )
+        summary = {
+            "type": "tool_loop_summary",
+            "mode": "tools",
+            "node_id": config.node_id,
+            "session_id": config.session_id,
+            "turns_used": result.turns_used,
+            "tool_calls_made": result.tool_calls_made,
+            "last_reasoning_content": result.last_reasoning_content,
+            "usage": result.usage,
+        }
     try:
         parsed = config.output_model.model_validate(result.artifact)
     except ValidationError as exc:
-        raise SchemaValidationHarnessError(str(exc)) from exc
+        raise SchemaValidationHarnessError(
+            str(exc),
+            raw_artifact=result.artifact,
+            summary=summary,
+        ) from exc
     _assert_business_output(
         node_id=config.node_id,
         scenario=base_payload.get("scenario") or base_payload,
         artifact=parsed,
     )
     _attach_final_artifact(provider, config.node_id, parsed)
-    output_path = _write_artifact(config.output_dir, config.node_id, config.session_id, parsed)
+    output_path = write_node_artifact(config.output_dir, config.node_id, config.session_id, parsed)
     record = {
         "node_id": config.node_id,
         "attempt": config.attempt,
@@ -101,7 +136,7 @@ def run_node_attempt(
     )
 
 
-def _write_artifact(
+def write_node_artifact(
     output_dir: Path,
     node_id: str,
     session_id: str,
@@ -125,6 +160,12 @@ def _attach_final_artifact(provider: Any, node_id: str, parsed: BaseModel) -> No
 
 
 def _assert_business_output(*, node_id: str, scenario: dict[str, Any], artifact: BaseModel) -> None:
+    if isinstance(scenario, dict):
+        validate_artifact_against_payload(
+            node_id=node_id,
+            payload=scenario,
+            artifact=artifact,
+        )
     if node_id != "personalized_copy_generation":
         return
     if not isinstance(scenario, dict):

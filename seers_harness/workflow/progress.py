@@ -19,13 +19,31 @@ it between calls.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
+import unicodedata
 from dataclasses import dataclass
 from typing import IO, Any
 
 
 _CLI_WRITE_LOCK = threading.Lock()
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_RESET = "\x1b[0m"
+_DIM = "\x1b[2m"
+_BOLD = "\x1b[1m"
+_CYAN = "\x1b[36m"
+_BRIGHT_CYAN = "\x1b[96m"
+_GREEN = "\x1b[32m"
+_BRIGHT_GREEN = "\x1b[92m"
+_YELLOW = "\x1b[33m"
+_BRIGHT_YELLOW = "\x1b[93m"
+_RED = "\x1b[31m"
+_BRIGHT_RED = "\x1b[91m"
+_MAGENTA = "\x1b[35m"
+_BRIGHT_MAGENTA = "\x1b[95m"
+_BLUE = "\x1b[34m"
+_WHITE = "\x1b[97m"
 
 
 @dataclass
@@ -67,7 +85,9 @@ class DashboardRecent:
 
 @dataclass
 class DashboardState:
-    title: str = "SEERS production run"
+    banner_lines: list[str] | None = None
+    use_color: bool = False
+    title: str = "VIP COPY production run"
     subtitle: str = ""
     total: int = 0
     completed: int = 0
@@ -216,7 +236,7 @@ class DashboardReporter:
         )
         if self.ci_plain:
             block = "[dashboard]\n" + block
-        write_cli_block(self.stream, block)
+        write_cli_block(self.stream, block, allow_ansi=state.use_color and not self.ci_plain)
 
 
 def _clean_cli_text(value: Any) -> str:
@@ -233,25 +253,41 @@ def _clean_cli_line_text(value: Any) -> str:
     return text.replace("\x1b", "?").replace("\r", " ").replace("\n", " ")
 
 
-def render_cli_event(scope: str, message: str = "", **fields: Any) -> str:
+def render_cli_event(
+    scope: str,
+    message: str = "",
+    *,
+    styled: bool = False,
+    use_color: bool = False,
+    **fields: Any,
+) -> str:
     """Return a compact keyed CLI event line.
 
     The format is intentionally plain text so concurrent and CI runs can
     consume it without terminal state:
 
-        ``[stage 3] done status=PASSED completed=20/20 failures=0``
+        ``[production batch] done status=PASSED completed=15/15 failures=0``
     """
 
-    parts = [f"[{_clean_cli_text(scope)}]"]
+    clean_scope = _clean_cli_text(scope)
+    prefix = f"[{clean_scope}]"
+    if styled:
+        icon = _event_icon(clean_scope, message, fields)
+        prefix = f"{icon} {prefix}"
+        if use_color:
+            prefix = _color(prefix, _event_color(message, fields), True)
+    parts = [prefix]
     if message:
-        parts.append(_clean_cli_text(message))
+        message_text = _clean_cli_text(message)
+        parts.append(_color(message_text, _BOLD, use_color and styled))
     for key, value in fields.items():
         if value is None:
             continue
         key_text = _clean_cli_text(key)
         if key_text.endswith("_"):
             key_text = key_text[:-1]
-        parts.append(f"{key_text}={_clean_cli_text(value)}")
+        field_text = f"{key_text}={_clean_cli_text(value)}"
+        parts.append(_color(field_text, _DIM, use_color and styled))
     return " ".join(parts)
 
 
@@ -268,23 +304,34 @@ def render_dashboard(
     running = list(state.running or [])
     recent = list(state.recent or [])
     pct = _percent(state.completed, state.total)
-    lines = [_border(width)]
+    use_color = bool(state.use_color)
+    border = _color(_border(width), _CYAN, use_color)
+    divider = _color(_divider(width), _CYAN, use_color)
+    lines = [border]
+    if state.banner_lines:
+        banner_colors = [_BRIGHT_CYAN, _CYAN, _BRIGHT_MAGENTA, _MAGENTA, _BRIGHT_CYAN]
+        for line in state.banner_lines:
+            color = banner_colors[len(lines) % len(banner_colors)]
+            lines.append(_row(_color(_center_line(line, inner), color, use_color), width))
+        lines.append(divider)
     title_right = f"elapsed {state.elapsed}"
-    lines.append(_row(_split_line(state.title, title_right, inner), width))
+    title = _color(state.title, _BOLD + _BRIGHT_CYAN, use_color)
+    elapsed = _color(title_right, _BRIGHT_YELLOW, use_color)
+    lines.append(_row(_split_line(title, elapsed, inner), width))
     if state.subtitle:
-        lines.append(_row(_fit(state.subtitle, inner), width))
+        lines.append(_row(_color(_fit(state.subtitle, inner), _DIM, use_color), width))
     lines.append(
         _row(
-            _fit(
+            _fit_line(
                 "  ".join(
                     [
-                        f"total {state.total}",
-                        f"done {state.completed}",
-                        f"running {len(running)}",
-                        f"queued {state.queued}",
-                        f"ok {state.ok}",
-                        f"failed {state.failed}",
-                        f"trials {state.trials}",
+                        _color(f"📦 total {state.total}", _WHITE, use_color),
+                        _color(f"✅ done {state.completed}", _BRIGHT_GREEN, use_color),
+                        _color(f"⚙️ running {len(running)}", _BRIGHT_CYAN, use_color),
+                        _color(f"⏳ queued {state.queued}", _YELLOW, use_color),
+                        _color(f"🟢 ok {state.ok}", _GREEN, use_color),
+                        _color(f"🔴 failed {state.failed}", _BRIGHT_RED, use_color),
+                        _color(f"🧪 trials {state.trials}", _MAGENTA, use_color),
                     ]
                 ),
                 inner,
@@ -292,33 +339,43 @@ def render_dashboard(
             width,
         )
     )
-    lines.append(_row(f"progress {_progress_bar(state.completed, state.total)} {pct}%", width))
-    lines.append(_divider(width))
+    progress = _progress_bar(
+        state.completed,
+        state.total,
+        width=28,
+        use_color=use_color,
+    )
+    lines.append(_row(f"📈 progress {progress} {_color(str(pct) + '%', _BRIGHT_YELLOW, use_color)}", width))
+    lines.append(divider)
     shown = running[: max(1, max_running)]
     lines.append(
         _row(
-            f"Running ({len(running)}"
+            _color(
+                f"⚡ Running ({len(running)}"
             + (f", showing {len(shown)}" if len(running) > len(shown) else "")
-            + ")",
+                + ")",
+                _BRIGHT_CYAN,
+                use_color,
+            ),
             width,
         )
     )
     if shown:
         for idx, task in enumerate(shown, start=1):
-            lines.append(_row(_task_line(idx, task, inner), width))
+            lines.append(_row(_task_line(idx, task, inner, use_color=use_color), width))
         hidden = len(running) - len(shown)
         if hidden > 0:
-            lines.append(_row(f"  +{hidden} more running", width))
+            lines.append(_row(_color(f"  +{hidden} more running", _YELLOW, use_color), width))
     else:
-        lines.append(_row("  no active requests", width))
-    lines.append(_divider(width))
-    lines.append(_row("Recent", width))
+        lines.append(_row(_color("  no active requests", _DIM, use_color), width))
+    lines.append(divider)
+    lines.append(_row(_color("🧾 Recent", _BRIGHT_MAGENTA, use_color), width))
     if recent:
         for item in recent[:3]:
-            lines.append(_row(_recent_line(item, inner), width))
+            lines.append(_row(_recent_line(item, inner, use_color=use_color), width))
     else:
-        lines.append(_row("  no completions yet", width))
-    lines.append(_border(width))
+        lines.append(_row(_color("  no completions yet", _DIM, use_color), width))
+    lines.append(border)
     return "\n".join(lines)
 
 
@@ -328,12 +385,23 @@ def _percent(done: int, total: int) -> int:
     return max(0, min(100, round((done / total) * 100)))
 
 
-def _progress_bar(done: int, total: int, width: int = 20) -> str:
+def _progress_bar(
+    done: int,
+    total: int,
+    width: int = 20,
+    *,
+    use_color: bool = False,
+) -> str:
     if total <= 0:
         filled = 0
     else:
         filled = round((max(0, min(done, total)) / total) * width)
-    return "[" + "#" * filled + "-" * (width - filled) + "]"
+    filled_text = "█" * filled
+    empty_text = "░" * (width - filled)
+    if use_color:
+        filled_text = _color(filled_text, _BRIGHT_GREEN, True)
+        empty_text = _color(empty_text, _DIM, True)
+    return "[" + filled_text + empty_text + "]"
 
 
 def _border(width: int) -> str:
@@ -346,56 +414,78 @@ def _divider(width: int) -> str:
 
 def _row(text: str, width: int) -> str:
     inner = width - 4
-    return f"| {_fit_line(text, inner).ljust(inner)} |"
+    clipped = _fit_line(text, inner)
+    pad = max(0, inner - _display_width(clipped))
+    return f"| {clipped}{' ' * pad} |"
 
 
 def _fit(text: Any, width: int) -> str:
     cleaned = _clean_cli_text(text)
-    if len(cleaned) <= width:
+    if _display_width(cleaned) <= width:
         return cleaned
     if width <= 1:
         return cleaned[:width]
-    return cleaned[: width - 1] + "."
+    return _truncate_visible(cleaned, width - 1) + "."
 
 
 def _fit_line(text: Any, width: int) -> str:
-    cleaned = _clean_cli_line_text(text)
-    if len(cleaned) <= width:
+    cleaned = _clean_cli_line_text_allow_ansi(text)
+    if _display_width(cleaned) <= width:
         return cleaned
     if width <= 1:
-        return cleaned[:width]
-    return cleaned[: width - 1] + "."
+        return _truncate_visible(cleaned, width)
+    return _truncate_visible(cleaned, width - 1) + "."
+
+
+def _center_line(text: Any, width: int) -> str:
+    fitted = _fit_line(text, width)
+    pad = max(0, width - _display_width(fitted))
+    left = pad // 2
+    right = pad - left
+    return " " * left + fitted + " " * right
 
 
 def _split_line(left: str, right: str, width: int) -> str:
-    left = _clean_cli_text(left)
-    right = _clean_cli_text(right)
-    if len(left) + len(right) + 1 > width:
+    left = _clean_cli_line_text_allow_ansi(left)
+    right = _clean_cli_line_text_allow_ansi(right)
+    if _display_width(left) + _display_width(right) + 1 > width:
         return _fit(left, width)
-    return left + " " * (width - len(left) - len(right)) + right
+    return left + " " * (width - _display_width(left) - _display_width(right)) + right
 
 
-def _task_line(index: int, task: DashboardTask, width: int) -> str:
-    prefix = f"  {index:02d} {_fit(task.request_id, 18).ljust(18)}"
-    node = _fit(task.node, 30).ljust(30)
-    elapsed = _fit(task.elapsed, 8).rjust(8) if task.elapsed else " " * 8
-    detail_width = max(8, width - len(prefix) - len(node) - len(elapsed) - 3)
-    detail = _fit(task.detail or "-", detail_width).ljust(detail_width)
+def _task_line(index: int, task: DashboardTask, width: int, *, use_color: bool = False) -> str:
+    request_id = _pad_visible(_fit(task.request_id, 18), 18)
+    prefix = f"  {_color(f'{index:02d}', _BRIGHT_YELLOW, use_color)} {request_id}"
+    node = _color(_pad_visible(_fit(task.node, 30), 30), _BRIGHT_CYAN, use_color)
+    elapsed = _pad_visible(_fit(task.elapsed, 8), 8, align="right") if task.elapsed else " " * 8
+    elapsed = _color(elapsed, _YELLOW, use_color)
+    detail_width = max(
+        8,
+        width
+        - _display_width(prefix)
+        - _display_width(node)
+        - _display_width(elapsed)
+        - 3,
+    )
+    detail = _pad_visible(_fit(task.detail or "-", detail_width), detail_width)
     return f"{prefix} {node} {detail} {elapsed}"
 
 
-def _recent_line(item: DashboardRecent, width: int) -> str:
-    status = _fit(item.status, 6).ljust(6)
-    request = _fit(item.request_id, 18).ljust(18)
-    detail_width = max(8, width - len(status) - len(request) - 5)
-    return f"  {status} {request} {_fit(item.detail or '-', detail_width)}"
+def _recent_line(item: DashboardRecent, width: int, *, use_color: bool = False) -> str:
+    icon = "✅" if item.status == "ok" else "⚠️"
+    color = _BRIGHT_GREEN if item.status == "ok" else _BRIGHT_RED
+    status = _color(_pad_visible(_fit(item.status, 6), 6), color, use_color)
+    request = _pad_visible(_fit(item.request_id, 18), 18)
+    detail_width = max(8, width - _display_width(status) - _display_width(request) - 8)
+    return f"  {icon} {status} {request} {_fit(item.detail or '-', detail_width)}"
 
 
-def write_cli_line(stream: IO[str], line: str) -> None:
+def write_cli_line(stream: IO[str], line: str, *, allow_ansi: bool = False) -> None:
     """Write one complete CLI line under a process-wide thread lock."""
 
     with _CLI_WRITE_LOCK:
-        stream.write(_clean_cli_line_text(line) + "\n")
+        cleaner = _clean_cli_line_text_allow_ansi if allow_ansi else _clean_cli_line_text
+        stream.write(cleaner(line) + "\n")
         # Flushing is best-effort: stdout-like streams in tests (StringIO)
         # do not require it, but real terminals/CI pipelines benefit from
         # immediate visibility under long-running fake or real chains.
@@ -404,12 +494,96 @@ def write_cli_line(stream: IO[str], line: str) -> None:
             flush()
 
 
-def write_cli_block(stream: IO[str], block: str) -> None:
+def write_cli_block(stream: IO[str], block: str, *, allow_ansi: bool = False) -> None:
     """Write a multi-line CLI snapshot under a process-wide thread lock."""
 
     with _CLI_WRITE_LOCK:
-        clean_block = "\n".join(_clean_cli_line_text(line) for line in block.splitlines())
+        cleaner = _clean_cli_line_text_allow_ansi if allow_ansi else _clean_cli_line_text
+        clean_block = "\n".join(cleaner(line) for line in block.splitlines())
         stream.write(clean_block.rstrip("\n") + "\n")
         flush = getattr(stream, "flush", None)
         if callable(flush):
             flush()
+
+
+def _clean_cli_line_text_allow_ansi(value: Any) -> str:
+    text = str(value)
+    return text.replace("\r", " ").replace("\n", " ")
+
+
+def _color(text: str, code: str, enabled: bool) -> str:
+    if not enabled or not text:
+        return text
+    return f"{code}{text}{_RESET}"
+
+
+def _event_icon(scope: str, message: str, fields: dict[str, Any]) -> str:
+    status = str(fields.get("status") or "").upper()
+    if status == "PASSED" or message in {"done", "stage_passed"}:
+        return "✅"
+    if status == "FAILED" or "fail" in message.lower() or "error" in message.lower():
+        return "⚠️"
+    if "runner" in scope and message == "start":
+        return "🚀"
+    if "env" in message:
+        return "🔑"
+    if "promotion" in message:
+        return "🧬"
+    return "ℹ️"
+
+
+def _event_color(message: str, fields: dict[str, Any]) -> str:
+    status = str(fields.get("status") or "").upper()
+    lowered = message.lower()
+    if status == "PASSED" or message == "done":
+        return _BRIGHT_GREEN
+    if status == "FAILED" or "fail" in lowered or "error" in lowered:
+        return _BRIGHT_RED
+    if "promotion" in lowered:
+        return _BRIGHT_MAGENTA
+    if "start" in lowered:
+        return _BRIGHT_CYAN
+    return _BRIGHT_YELLOW
+
+
+def _display_width(text: Any) -> int:
+    stripped = _ANSI_RE.sub("", str(text))
+    width = 0
+    for char in stripped:
+        if unicodedata.combining(char):
+            continue
+        if unicodedata.category(char) in {"Mn", "Me", "Cf"}:
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width
+
+
+def _truncate_visible(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    out: list[str] = []
+    visible = 0
+    index = 0
+    while index < len(text):
+        match = _ANSI_RE.match(text, index)
+        if match:
+            out.append(match.group(0))
+            index = match.end()
+            continue
+        char = text[index]
+        char_width = _display_width(char)
+        if visible + char_width > width:
+            break
+        out.append(char)
+        visible += char_width
+        index += 1
+    if _ANSI_RE.search("".join(out)) and not "".join(out).endswith(_RESET):
+        out.append(_RESET)
+    return "".join(out)
+
+
+def _pad_visible(text: str, width: int, *, align: str = "left") -> str:
+    pad = max(0, width - _display_width(text))
+    if align == "right":
+        return " " * pad + text
+    return text + " " * pad

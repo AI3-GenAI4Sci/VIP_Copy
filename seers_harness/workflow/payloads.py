@@ -40,12 +40,6 @@ _BEHAVIOR_TOP_LIST_KEYS = (
     "collect_brand_id_list_topN",
     "click_brand_id_list_topN",
 )
-_TARGET_PRODUCT_DERIVED_KEYS = (
-    "price_vs_user_baseline_ratio",
-    "brand_recent_touched",
-    "ctr_band",
-    "is_new",
-)
 _DERIVED_FEATURE_KEYS = (
     "price_vs_user_baseline_ratio",
     "price_vs_user_baseline_bucket",
@@ -141,16 +135,6 @@ def _bounded_derived_features(features: Any) -> dict[str, Any]:
     }
 
 
-def _target_product_derived_signals(
-    scenario: dict[str, Any],
-    products: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    return {
-        product_id: _pick_ordered(features, _TARGET_PRODUCT_DERIVED_KEYS)
-        for product_id, features in _derived_for_products(scenario, products).items()
-    }
-
-
 def _bounded_products(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bounded: list[dict[str, Any]] = []
     for product in products:
@@ -185,9 +169,16 @@ def _user_state_summary(scenario: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _user_history_summary(scenario: dict[str, Any]) -> dict[str, Any]:
+    user_state = scenario.get("user_state") if isinstance(scenario.get("user_state"), dict) else {}
+    profile = user_state.get("profile") if isinstance(user_state.get("profile"), dict) else {}
+    return {
+        "profile": _pick_ordered(profile, _SUMMARY_PROFILE_KEYS),
+    }
+
+
 def _user_state_signals(
     scenario: dict[str, Any],
-    products: list[dict[str, Any]],
 ) -> dict[str, Any]:
     user_state = scenario.get("user_state") if isinstance(scenario.get("user_state"), dict) else {}
     profile = user_state.get("profile") if isinstance(user_state.get("profile"), dict) else {}
@@ -195,26 +186,23 @@ def _user_state_signals(
     return {
         "profile_counts": _pick_ordered(profile, _PROFILE_COUNT_KEYS),
         "behavior_top_lists": _pick_ordered(behavior, _BEHAVIOR_TOP_LIST_KEYS),
-        "target_product_derived": _target_product_derived_signals(scenario, products),
     }
 
 
 def user_personalization_payload_for(scenario: Any) -> dict[str, Any]:
     """User-side personalization mining input.
 
-    This node receives user-side features and light list context only. Product
-    facts are withheld so user factors stay reusable across request products.
+    This node receives reusable user history only. Request context, target
+    products, and list context are withheld so factors can be cached per user.
     """
     s = _scenario_dict(scenario)
-    products = _bounded_products(list(s.get("products") or []))
     return {
         "schema_version": "request_user_personalization_payload_v1",
         "scenario_id": s.get("scenario_id"),
         "request_id": s.get("request_id"),
         "minimum_semantic_unit": "request/list_group",
-        "user_state_summary": _user_state_summary(s),
-        "user_state_signals": _user_state_signals(s, products),
-        "list_context": s.get("list_context") or {},
+        "user_state_summary": _user_history_summary(s),
+        "user_state_signals": _user_state_signals(s),
     }
 
 
@@ -227,13 +215,14 @@ def copy_payload_for(
     s = _scenario_dict(scenario)
     artifact = user_artifact or {}
     products = _bounded_products(list(s.get("products") or []))
+    user_factors = _business_user_factors(artifact)
     return {
         "schema_version": "request_personalized_copy_generation_payload_v1",
         "scenario_id": s.get("scenario_id"),
         "request_id": s.get("request_id"),
         "minimum_semantic_unit": "request/list_group",
         "user_state_summary": _user_state_summary(s),
-        "user_factors": list(artifact.get("user_factors") or []),
+        "user_factors": user_factors,
         "products": products,
         "target_products": products,
         "target_product_count": len(products),
@@ -274,12 +263,25 @@ def rubric_payload_for(
         "request_id": s.get("request_id"),
         "minimum_semantic_unit": "request/list_group",
         "user_state_summary": _user_state_summary(s),
-        "user_factors": list(user.get("user_factors") or []),
+        "user_factors": _business_user_factors(user),
         "products": products,
         "derived_features_by_product": _derived_for_products(s, products),
         "candidates": candidates,
         "candidate_count": len(candidates),
     }
+
+
+def _business_user_factors(artifact: dict[str, Any]) -> list[Any]:
+    """Return user factors without audit-only evidence_refs for downstream nodes."""
+    out: list[Any] = []
+    for factor in artifact.get("user_factors") or []:
+        if not isinstance(factor, dict):
+            out.append(factor)
+            continue
+        clean = dict(factor)
+        clean.pop("evidence_refs", None)
+        out.append(clean)
+    return out
 
 
 def provider_payload_for_node(

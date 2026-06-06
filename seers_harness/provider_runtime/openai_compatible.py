@@ -1,54 +1,35 @@
-"""OpenAI-compatible provider adapter — single entry ``generate_with_tools`` (PROV-01).
-
-Runtime params locked per ADR-PROBE-7.1.1: ``reasoning_effort="max"`` +
-``thinking={"type":"enabled"}`` + ``tool_choice="auto"`` at DeepSeek ``/beta``
-(PROV-03). Default model ``deepseek-v4-pro``; ``deepseek-chat`` deprecated.
-CR-05: bounded parse-layer retry (``DEEPSEEK_PARSE_MAX_RETRIES``, default 3,
-0 disables) absorbs transient truncated ``tool_call.arguments`` JSON without
-touching HTTP retries (D-03) or D-19 routing on exhaustion.
-"""
+"""OpenAI-compatible provider adapter for production JSON and evolution tools."""
 
 from __future__ import annotations
 
 import json
 import os
 import sys
+import threading
 from typing import Any
 
 from openai import OpenAI
 
-from seers_harness.core.errors import (
-    ProviderAuthError,
-    ProviderRateLimitError,
-    ProviderResponseError,
-    ProviderTransientError,
-    classify_exception,
-)
+from seers_harness.core.errors import ProviderAuthError, ProviderRateLimitError, ProviderResponseError, ProviderTransientError, classify_exception
 from seers_harness.provider_runtime.base import ProviderResult
+from seers_harness.provider_runtime.deepseek_config import DEFAULT_CALL_DEADLINE_SECONDS, DEFAULT_MAX_INFLIGHT_CALLS, DEFAULT_REASONING_EFFORT, DEFAULT_TIMEOUT_SECONDS, DEEPSEEK_BETA_BASE_URL, deepseek_runtime_facts, parse_max_retries
+from seers_harness.provider_runtime.streaming import collect_stream_response, extract_usage
 from seers_harness.workflow.progress import render_cli_event, write_cli_line
 
-DEEPSEEK_BETA_BASE_URL = "https://api.deepseek.com/beta"
-_DEFAULT_TIMEOUT_SECONDS = 180
-_DEFAULT_PARSE_MAX_RETRIES = 3
+# Locked runtime literals: tool_choice="auto", reasoning_effort="xhigh",
+# "thinking": {"type": "enabled"}
 _TYPED_PROVIDER_ERRORS: dict[str, type[Exception]] = {
     "rate_limit": ProviderRateLimitError,
     "transient_provider": ProviderTransientError,
     "auth": ProviderAuthError,
 }
 
-
-def _parse_max_retries() -> int:
-    raw = os.environ.get("DEEPSEEK_PARSE_MAX_RETRIES")
-    if not raw:
-        return _DEFAULT_PARSE_MAX_RETRIES
-    try:
-        return max(int(raw), 0)
-    except ValueError:
-        return _DEFAULT_PARSE_MAX_RETRIES
+_SEMAPHORE_LOCK = threading.Lock()
+_SEMAPHORES: dict[int, threading.BoundedSemaphore] = {}
 
 
 class OpenAICompatibleProvider:
-    """Single Phase-2 LLM entry point. ``last_usage`` is set on every call."""
+    """OpenAI-compatible DeepSeek adapter. ``last_usage`` is set on every call."""
 
     def __init__(
         self,
@@ -58,6 +39,8 @@ class OpenAICompatibleProvider:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
         max_retries: int = 0,
+        call_deadline_seconds: float | None = None,
+        max_inflight_calls: int | None = None,
     ) -> None:
         kwargs: dict[str, Any] = {"api_key": api_key, "base_url": base_url or DEEPSEEK_BETA_BASE_URL, "max_retries": max_retries}
         if timeout_seconds is not None:
@@ -65,21 +48,30 @@ class OpenAICompatibleProvider:
         self.client = OpenAI(**kwargs)
         self.model = model
         self.last_usage: dict[str, Any] = {}
+        self.call_deadline_seconds = (
+            float(call_deadline_seconds)
+            if call_deadline_seconds is not None
+            else DEFAULT_CALL_DEADLINE_SECONDS
+        )
+        self.max_inflight_calls = max(1, int(max_inflight_calls or DEFAULT_MAX_INFLIGHT_CALLS))
 
     def generate_with_tools(self, *, node_id: str, skill_bundle: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> ProviderResult:
         params: dict[str, Any] = {
             "model": self.model, "messages": messages, "tools": tools,
-            "tool_choice": "auto", "reasoning_effort": "max",
+            "tool_choice": "auto", "reasoning_effort": DEFAULT_REASONING_EFFORT,
             "extra_body": {"thinking": {"type": "enabled"}},
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         last_parse: ProviderResponseError | None = None
-        for _attempt in range(_parse_max_retries() + 1):
+        max_parse_retries = parse_max_retries()
+        for _attempt in range(max_parse_retries + 1):
             try:
-                response = self.client.chat.completions.create(**params)
+                response = self._stream_chat_completion(params)
             except Exception as exc:
                 typed = _TYPED_PROVIDER_ERRORS.get(classify_exception(exc)["category"])
                 if typed is not None:
-                    raise typed(repr(exc)) from exc
+                    raise _typed_provider_error(typed, exc) from exc
                 raise
             self.last_usage = extract_usage(response)
             choice = response.choices[0]
@@ -98,7 +90,7 @@ class OpenAICompatibleProvider:
                         "provider",
                         "parse_retry",
                         node=node_id,
-                        attempt=f"{_attempt + 1}/{_parse_max_retries() + 1}",
+                        attempt=f"{_attempt + 1}/{max_parse_retries + 1}",
                     ),
                 )
                 continue
@@ -114,6 +106,50 @@ class OpenAICompatibleProvider:
         assert last_parse is not None
         raise last_parse
 
+    def generate_json(self, *, node_id: str, skill_bundle: str, messages: list[dict[str, Any]]) -> ProviderResult:
+        params: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "reasoning_effort": DEFAULT_REASONING_EFFORT,
+            "extra_body": {"thinking": {"type": "enabled"}},
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        try:
+            response = self._stream_chat_completion(params)
+        except Exception as exc:
+            typed = _TYPED_PROVIDER_ERRORS.get(classify_exception(exc)["category"])
+            if typed is not None:
+                raise _typed_provider_error(typed, exc) from exc
+            raise
+        self.last_usage = extract_usage(response)
+        choice = response.choices[0]
+        message = choice.message
+        return ProviderResult(
+            payload={},
+            usage=dict(self.last_usage),
+            tool_calls=[],
+            finish_reason=getattr(choice, "finish_reason", None),
+            reasoning_content=getattr(message, "reasoning_content", None),
+            raw_messages=[dict(m) for m in messages],
+            raw_response_text=(message.content or ""),
+            model=getattr(response, "model", None),
+            raw_tool_calls=[],
+        )
+
+    def _stream_chat_completion(self, params: dict[str, Any]) -> Any:
+        semaphore = _shared_inflight_semaphore(self.max_inflight_calls)
+        semaphore.acquire()
+        try:
+            response_or_stream = self.client.chat.completions.create(**params)
+            return collect_stream_response(
+                response_or_stream,
+                deadline_seconds=self.call_deadline_seconds,
+            )
+        finally:
+            semaphore.release()
+
 
 def _parse_args(raw: str | None, *, node_id: str) -> dict[str, Any]:
     if raw is None:
@@ -124,36 +160,52 @@ def _parse_args(raw: str | None, *, node_id: str) -> dict[str, Any]:
         raise ProviderResponseError(f"Failed to parse tool_call.arguments for node {node_id}: {raw[:200]}") from exc
 
 
-def extract_usage(response: Any) -> dict[str, Any]:
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return {}
-    if hasattr(usage, "model_dump"):
-        dumped = usage.model_dump(mode="json")
-        if isinstance(dumped, dict):
-            return dumped
-    return {k: getattr(usage, k, None) for k in ("prompt_tokens", "completion_tokens", "total_tokens")}
+def _typed_provider_error(error_type: type[Exception], exc: Exception) -> Exception:
+    typed = error_type(repr(exc))
+    for attr in ("partial_response", "partial_summary"):
+        if hasattr(exc, attr):
+            setattr(typed, attr, getattr(exc, attr))
+    return typed
 
 
-def deepseek_runtime_facts() -> dict[str, Any]:
-    """Return read-only DeepSeek runtime facts (PROD-02). Pure: no client, no network."""
-    sample = type("_SampleRateLimit", (Exception,), {})("HTTP 429 rate limit exceeded")
-    return {
-        "default_model": "deepseek-v4-pro", "default_base_url": DEEPSEEK_BETA_BASE_URL,
-        "default_timeout_seconds": _DEFAULT_TIMEOUT_SECONDS, "default_sdk_max_retries": 0,
-        "thinking_enabled": True, "reasoning_effort": "max", "tool_choice": "auto",
-        "rate_limit_exception_category": str(classify_exception(sample)["category"]),
-    }
+def _shared_inflight_semaphore(max_inflight_calls: int) -> threading.BoundedSemaphore:
+    limit = max(1, int(max_inflight_calls))
+    with _SEMAPHORE_LOCK:
+        semaphore = _SEMAPHORES.get(limit)
+        if semaphore is None:
+            semaphore = threading.BoundedSemaphore(limit)
+            _SEMAPHORES[limit] = semaphore
+        return semaphore
 
 
-def deepseek_provider_from_env(*, model: str | None = None, timeout_seconds: float | None = None, max_retries: int | None = None) -> OpenAICompatibleProvider:
+def deepseek_provider_from_env(
+    *,
+    model: str | None = None,
+    timeout_seconds: float | None = None,
+    max_retries: int | None = None,
+    call_deadline_seconds: float | None = None,
+    max_inflight_calls: int | None = None,
+) -> OpenAICompatibleProvider:
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is required for DeepSeek provider")
-    timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT_SECONDS)))
+    timeout = timeout_seconds if timeout_seconds is not None else float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS)))
     retries = max_retries if max_retries is not None else int(os.environ.get("DEEPSEEK_SDK_MAX_RETRIES", "0"))
+    deadline = (
+        call_deadline_seconds
+        if call_deadline_seconds is not None
+        else float(os.environ.get("DEEPSEEK_CALL_DEADLINE_SECONDS", str(DEFAULT_CALL_DEADLINE_SECONDS)))
+    )
+    inflight = (
+        max_inflight_calls
+        if max_inflight_calls is not None
+        else int(os.environ.get("DEEPSEEK_MAX_INFLIGHT_CALLS", str(DEFAULT_MAX_INFLIGHT_CALLS)))
+    )
     return OpenAICompatibleProvider(
         model=model or os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
         api_key=api_key, base_url=os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BETA_BASE_URL),
-        timeout_seconds=timeout, max_retries=retries,
+        timeout_seconds=timeout,
+        max_retries=retries,
+        call_deadline_seconds=deadline,
+        max_inflight_calls=inflight,
     )

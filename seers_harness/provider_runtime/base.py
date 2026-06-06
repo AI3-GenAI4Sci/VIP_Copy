@@ -1,25 +1,8 @@
 """Provider interfaces shared by runtime adapters.
 
-Phase 2 declares one entry point — :py:meth:`Provider.generate_with_tools` —
-which returns a :class:`ProviderResult` carrying either tool-call output or a
-stop verdict. PROV-01: only ``generate_with_tools`` is exposed; no JSON
-fallback method exists on this Protocol (its literal absence here is the
-contract). PROV-05 makes ``tool_calls`` the primary output channel;
-``payload`` is retained as an empty back-compat slot.
-
-Per ADR-PROBE-7.1, reasoning + tools coexist at DeepSeek ``/beta``. Runtime
-params (``reasoning_effort="max"``, ``extra_body={"thinking":{"type":"enabled"}}``,
-``base_url="https://api.deepseek.com/beta"``, ``tool_choice="auto"``) are
-hard-coded inside the Wave 2 adapter — PROV-03 forbids per-turn / per-node
-branching, so no per-node policy dataclass appears on this surface (its
-literal absence is also a contract). See
-``research/probe_reasoning_with_tools_result.md``.
-
-Adapters raise :class:`seers_harness.core.errors.ProviderRateLimitError`,
-:class:`seers_harness.core.errors.ProviderTransientError`, or
-:class:`seers_harness.core.errors.ProviderAuthError` from
-:py:meth:`Provider.generate_with_tools` per PROV-04; the loop layer routes
-these via ``classify_exception``.
+Production workflow nodes use :py:meth:`Provider.generate_json` so DeepSeek JSON
+mode can return structured artifacts without tool calls. Evolution skills still
+use :py:meth:`Provider.generate_with_tools` for explicit patch/tool contracts.
 """
 
 from __future__ import annotations
@@ -29,10 +12,10 @@ from typing import Any, Protocol
 
 
 class Provider(Protocol):
-    """Single Phase 2 LLM entry point.
+    """Provider surface for production JSON mode and evolution tool mode.
 
     Adapters (e.g. ``openai_compatible.OpenAICompatibleProvider`` from Plan 02-02)
-    set ``last_usage`` on every call so the Phase 3 tool_loop can read
+    set ``last_usage`` on every call so the workflow can read
     ``provider.last_usage`` after each turn for accounting.
     """
 
@@ -47,6 +30,16 @@ class Provider(Protocol):
         tools: list[dict[str, Any]],
     ) -> ProviderResult:
         """One LLM turn. Returns either tool_calls or stop (via finish_reason)."""
+        ...
+
+    def generate_json(
+        self,
+        *,
+        node_id: str,
+        skill_bundle: str,
+        messages: list[dict[str, Any]],
+    ) -> ProviderResult:
+        """One JSON-mode LLM turn for production nodes."""
         ...
 
 

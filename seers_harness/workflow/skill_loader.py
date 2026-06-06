@@ -1,19 +1,22 @@
-"""SKILL.md prose loader — F-08-B fix (Plan 08-G1).
+"""Skill prose loader for production and evolution skills.
 
-Single harness primitive that reads ``<root>/<skill_name>/SKILL.md`` prose into
-``skill_bundle`` for the tool loop. Replaces the literal placeholder string at
+Single harness primitive that reads skill prose into ``skill_bundle`` for the
+tool loop. ``SKILL.json`` is preferred when present and is rendered
+deterministically to the same Markdown surface; ``SKILL.md`` remains the
+fallback for skills that have not been moved to structured source. Replaces the
+literal placeholder string at
 ``dag_runner.py:84`` and the parallel inline ``read_text`` in
-``runner.py:_distill_after_stage1``.
+``validation.runner`` distillation calls.
 
 Architecture (D2 — single primitive + extension layer):
 
   - ``load_skill_prose(skill_name) -> str`` is the **only** way the harness
-    reads SKILL.md prose. ``grep 'read_text' over SKILL.md`` outside this
-    module must return zero hits.
+    reads skill prose. ``grep 'read_text' over SKILL.md`` outside this module
+    must return zero hits.
   - ``NODE_SKILL_BINDING`` + ``resolve_skill_for_node(node_id)`` is the
     extension layer that maps DAG node ids to skill names. It is **not** a
     second loader — it merely names which skill_name to feed the primitive.
-  - A module-level cache (``_PROSE_CACHE``) reads each SKILL.md from disk
+  - A module-level cache (``_PROSE_CACHE``) reads each skill source from disk
     exactly once per process; subsequent calls return the cached text.
   - On miss the loader raises ``FileNotFoundError`` — **never** a fallback
     placeholder string. F-08-B was caused by a hard-coded 10-byte string
@@ -31,6 +34,8 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+
+from seers_harness.workflow.structured_skill import render_structured_skill_file
 
 __all__ = [
     "load_skill_prose",
@@ -50,12 +55,12 @@ _SKILL_ROOTS: tuple[Path, ...] = (
 )
 
 
-# Static binding from DAG node id to skill name. Production generation now
-# dispatches through the merged 2-node DAG:
+# Static binding from DAG node id to skill name. Production dispatches through
+# the formal three-node DAG:
 #   - ``personalized_copy_generation`` is the active generation surface.
 #   - ``personalized_copy_rubric`` is the downstream judge surface.
-#   - ``distill_after_stage1`` is the evolution distill node invoked from
-#     ``validation/runner.py``.
+#   - ``distill_after_production_request`` is the evolution distill node
+#     invoked from production batch traffic.
 #
 # Adding a new DAG node = add one row here. **Never** inline a parallel mapping
 # at the call site; that violates the D2 single-extension-point invariant.
@@ -63,13 +68,13 @@ NODE_SKILL_BINDING: dict[str, str] = {
     "personalized_user_mining": "personalized-user-mining",
     "personalized_copy_generation": "personalized-copy-generation",
     "personalized_copy_rubric": "personalized-copy-rubric-judge",
-    "distill_after_stage1": "distill-skill-deltas",
+    "distill_after_production_request": "distill-skill-deltas",
 }
 
 
 # Module-level prose cache. Read once per skill_name per process. Guarded by a
-# threading.Lock so concurrent readers (Stage 3 c=20 in
-# ``validation/runner.py``) cannot race the cache write — load is idempotent
+# threading.Lock so concurrent production readers cannot race the cache write —
+# load is idempotent
 # and the lock is held only across the dict insert, not the disk read.
 _PROSE_CACHE: dict[str, str] = {}
 _CACHE_LOCK: threading.Lock = threading.Lock()
@@ -91,9 +96,9 @@ def load_skill_prose(skill_name: str, *, skill_root: Path | None = None) -> str:
     if skill_root is not None:
         override_roots = (skill_root / "current", skill_root / "evolution")
         for root in override_roots:
-            candidate = root / skill_name / "SKILL.md"
-            if candidate.exists():
-                return candidate.read_text(encoding="utf-8")
+            candidate = _skill_source_path(root / skill_name)
+            if candidate is not None:
+                return _read_skill_source(candidate)
         raise FileNotFoundError(
             f"SKILL.md not found for skill_name={skill_name!r}; "
             f"searched override roots: "
@@ -105,9 +110,9 @@ def load_skill_prose(skill_name: str, *, skill_root: Path | None = None) -> str:
         return cached
 
     for root in _SKILL_ROOTS:
-        candidate = root / skill_name / "SKILL.md"
-        if candidate.exists():
-            text = candidate.read_text(encoding="utf-8")
+        candidate = _skill_source_path(root / skill_name)
+        if candidate is not None:
+            text = _read_skill_source(candidate)
             with _CACHE_LOCK:
                 _PROSE_CACHE[skill_name] = text
             return text
@@ -117,6 +122,22 @@ def load_skill_prose(skill_name: str, *, skill_root: Path | None = None) -> str:
         f"searched roots under workflow-skills/: "
         + ", ".join(str(r) for r in _SKILL_ROOTS)
     )
+
+
+def _skill_source_path(skill_dir: Path) -> Path | None:
+    structured = skill_dir / "SKILL.json"
+    if structured.exists():
+        return structured
+    markdown = skill_dir / "SKILL.md"
+    if markdown.exists():
+        return markdown
+    return None
+
+
+def _read_skill_source(path: Path) -> str:
+    if path.name == "SKILL.json":
+        return render_structured_skill_file(path)
+    return path.read_text(encoding="utf-8")
 
 
 def resolve_skill_for_node(node_id: str) -> str:
@@ -138,9 +159,9 @@ def resolve_skill_for_node(node_id: str) -> str:
 def _clear_cache_for_tests() -> None:
     """Test-only hook to reset the module-level cache.
 
-    Used by ``tests/test_skill_loader.py`` to make cache-hit assertions
-    deterministic across tests. Not part of the public API — production
-    code must not call this.
+    Used by the development test suite to make cache-hit assertions
+    deterministic. Not part of the public API — production code must not call
+    this.
     """
     with _CACHE_LOCK:
         _PROSE_CACHE.clear()

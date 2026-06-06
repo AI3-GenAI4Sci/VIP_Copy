@@ -26,12 +26,14 @@ from __future__ import annotations
 import json
 import math
 import random as _random_module
+import re
 from pathlib import Path
 from typing import Iterable, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
 from seers_harness.domain.models import EvidenceRef
+from seers_harness.workflow.structured_skill import JsonSkillEdit
 
 
 DeltaOperation = Literal["add", "modify", "delete"]
@@ -39,21 +41,30 @@ DeltaOperation = Literal["add", "modify", "delete"]
 
 ``add`` introduces a new sub-function, ``modify`` changes an existing
 sub-function, and ``delete`` removes a sub-function that consistently harms
-the workflow. Trial code only patches live skills for ``modify`` rows.
+the workflow. All three operations are trialable only when represented by
+structured JSON edits that apply cleanly to the current skill source.
 """
 
-DeltaStatus = Literal["experimental", "held", "rejected", "ready_for_review"]
+DeltaStatus = Literal[
+    "experimental",
+    "held",
+    "rejected",
+    "ready_for_review",
+    "promoted",
+]
 """Lifecycle states. ``experimental`` is the default seed.
 
 A delta moves to ``held`` after enough trials show no signal, ``rejected``
-after evidence shows it harms quality or token cost, and
-``ready_for_review`` only as a future gate marker. Phase 6 never writes
-durably to ``workflow-skills/current/`` — ``ready_for_review`` is bookkeeping.
+after evidence shows it harms quality or token cost, and ``ready_for_review``
+after production-traffic evidence reaches the promotion threshold. ``promoted``
+means the patch has been written into the live skill tree and the previous live
+file bytes have been archived for rollback.
 """
 
 NoTrialReason = Literal[
     "no_eligible_delta",
-    "no_hold_judgment",
+    "no_baseline_reference",
+    "exploration_rate_skip",
     "all_eligible_deltas_evidence_sufficient",
     "all_eligible_deltas_non_experimental",
     "target_unresolvable",
@@ -66,10 +77,9 @@ TriggerReason = Literal[
 ]
 
 MIN_INFORMATION_SAMPLES = 5
-EVIDENCE_SUFFICIENT_SAMPLES = 10
 DECISION_BOUNDARY_MEAN = 0.5
 NEAR_BOUNDARY_MARGIN = 0.15
-LOWER_BOUND_CONFIDENCE_MIN = 0.55
+POSTERIOR_EVIDENCE_CONFIDENCE = 0.975
 ACTIVE_PORTFOLIO_TARGETS: frozenset[str] = frozenset(
     {
         "current/personalized-user-mining/SKILL.md",
@@ -79,6 +89,30 @@ ACTIVE_PORTFOLIO_TARGETS: frozenset[str] = frozenset(
 """Production skill targets that may enter the active trial portfolio."""
 
 MAX_CLUSTER_EVIDENCE_REFS = 8
+_CLUSTER_OBSERVATION_RE = re.compile(
+    r"^Clustered from \d+ related proposals \((?P<ids>[^)]*)\)\. "
+    r"Representative observation: (?P<body>.*)$",
+    re.DOTALL,
+)
+_CLUSTER_SUMMARY_RE = re.compile(
+    r"^Distilled representative change for .+?\. (?P<body>.*)$",
+    re.DOTALL,
+)
+
+
+class DeltaPatch(BaseModel):
+    """Executable patch payload emitted by distill-skill-deltas."""
+
+    edits: list[JsonSkillEdit]
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("edits")
+    @classmethod
+    def _require_edits(cls, value: list[JsonSkillEdit]) -> list[JsonSkillEdit]:
+        if not value:
+            raise ValueError("DeltaPatch requires at least one JSON edit")
+        return value
 
 
 class ExplorationDecision(BaseModel):
@@ -106,7 +140,7 @@ class ExplorationDecision(BaseModel):
 class DeltaProposal(BaseModel):
     """One model-proposed delta after handler validation.
 
-    Emitted via ``record_delta_change`` followed by ``submit_delta_distillation_final``.
+    Emitted via ``record_delta_change`` and finalized deterministically by the harness.
     The handler enforces non-empty ``evidence_refs`` and rejects any payload
     carrying private trace text or self-rated metric fields.
     """
@@ -116,7 +150,8 @@ class DeltaProposal(BaseModel):
     function_id: str
     operation: DeltaOperation
     observation: str
-    proposed_change: str
+    change_summary: str
+    patch: "DeltaPatch"
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     applicable_surface: list[str] = Field(default_factory=list)
     failure_types: list[str] = Field(default_factory=list)
@@ -150,7 +185,8 @@ class DeltaPortfolioRow(BaseModel):
     function_id: str
     operation: DeltaOperation
     observation: str
-    proposed_change: str
+    change_summary: str
+    patch: "DeltaPatch"
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     applicable_surface: list[str] = Field(default_factory=list)
     failure_types: list[str] = Field(default_factory=list)
@@ -244,6 +280,77 @@ def belief_mean(row: DeltaPortfolioRow) -> float:
     return row.belief_alpha / denom
 
 
+def posterior_probability_above(
+    row: DeltaPortfolioRow,
+    *,
+    threshold: float = DECISION_BOUNDARY_MEAN,
+) -> float:
+    """Return posterior probability that a delta's win rate exceeds threshold."""
+    return beta_probability_above(
+        row.belief_alpha,
+        row.belief_beta,
+        threshold=threshold,
+    )
+
+
+def beta_probability_above(
+    alpha: float,
+    beta: float,
+    *,
+    threshold: float = DECISION_BOUNDARY_MEAN,
+) -> float:
+    """Return ``P(Beta(alpha, beta) > threshold)`` without external deps."""
+    if threshold <= 0:
+        return 1.0
+    if threshold >= 1:
+        return 0.0
+    if alpha <= 0 or beta <= 0:
+        return 0.5
+    rounded_alpha = round(alpha)
+    rounded_beta = round(beta)
+    if (
+        abs(alpha - rounded_alpha) < 1e-9
+        and abs(beta - rounded_beta) < 1e-9
+        and 1 <= rounded_alpha + rounded_beta <= 2000
+    ):
+        return _integer_beta_probability_above(
+            int(rounded_alpha),
+            int(rounded_beta),
+            threshold,
+        )
+    return _normal_beta_probability_above(alpha, beta, threshold)
+
+
+def _integer_beta_probability_above(alpha: int, beta: int, threshold: float) -> float:
+    n = alpha + beta - 1
+    q = 1.0 - threshold
+    if q <= 0:
+        return 0.0
+    term = q ** n
+    total = term
+    odds = threshold / q
+    for j in range(0, alpha - 1):
+        term *= (n - j) / (j + 1) * odds
+        total += term
+    return min(1.0, max(0.0, total))
+
+
+def _normal_beta_probability_above(
+    alpha: float,
+    beta: float,
+    threshold: float,
+) -> float:
+    denom = alpha + beta
+    if denom <= 0:
+        return 0.5
+    mean = alpha / denom
+    variance = alpha * beta / (denom * denom * (denom + 1.0))
+    if variance <= 0:
+        return 1.0 if mean > threshold else 0.0
+    z = (threshold - mean) / math.sqrt(variance)
+    return min(1.0, max(0.0, 0.5 * math.erfc(z / math.sqrt(2.0))))
+
+
 def update_after_trial(
     row: DeltaPortfolioRow,
     *,
@@ -305,21 +412,18 @@ def _wilson_lcb(success: int, total: int, *, z: float = 1.96) -> float:
 
 
 def _information_value_trigger(row: DeltaPortfolioRow) -> TriggerReason | None:
+    probability_above = posterior_probability_above(row)
+    posterior_confidence = max(probability_above, 1.0 - probability_above)
+    if posterior_confidence >= POSTERIOR_EVIDENCE_CONFIDENCE:
+        return None
+
     if row.sample_count < MIN_INFORMATION_SAMPLES:
         return "insufficient_sample_count"
 
-    mean = belief_mean(row)
-    if abs(mean - DECISION_BOUNDARY_MEAN) <= NEAR_BOUNDARY_MARGIN:
+    if abs(belief_mean(row) - DECISION_BOUNDARY_MEAN) <= NEAR_BOUNDARY_MARGIN:
         return "posterior_near_boundary"
 
-    lower_bound = _wilson_lcb(row.success_count, row.sample_count)
-    if (
-        row.sample_count < EVIDENCE_SUFFICIENT_SAMPLES
-        or lower_bound < LOWER_BOUND_CONFIDENCE_MIN
-    ):
-        return "insufficient_lower_bound_confidence"
-
-    return None
+    return "insufficient_lower_bound_confidence"
 
 
 def select_trial_delta(
@@ -330,12 +434,12 @@ def select_trial_delta(
     blocked_reason: NoTrialReason | None = None,
     rng: _random_module.Random | None = None,
 ) -> ExplorationDecision:
-    """Return an explicit exploration decision for one request.
+    """Return one Thompson-sampling exploration decision for one request.
 
     Eligible experimental deltas are filtered by target/applicable surface.
     A trial is triggered only while posterior evidence remains informative;
-    when it triggers, the selected delta is the highest Thompson posterior
-    sample from ``rng.betavariate(alpha, beta)``.
+    when it triggers, the selected delta is the highest Beta-Bernoulli
+    Thompson posterior sample from ``rng.betavariate(alpha, beta)``.
     """
     if blocked_reason is not None:
         return ExplorationDecision(
@@ -544,7 +648,8 @@ def assemble_portfolio(
                 function_id=proposal.function_id,
                 operation=proposal.operation,
                 observation=proposal.observation,
-                proposed_change=proposal.proposed_change,
+                change_summary=proposal.change_summary,
+                patch=proposal.patch,
                 evidence_refs=list(proposal.evidence_refs),
                 applicable_surface=list(proposal.applicable_surface),
                 failure_types=list(proposal.failure_types),
@@ -624,21 +729,24 @@ def _distill_delta_cluster(rows: list[DeltaPortfolioRow]) -> DeltaPortfolioRow:
         if len(merged_evidence_refs) >= MAX_CLUSTER_EVIDENCE_REFS:
             break
 
-    source_ids = [row.delta_id for row in rows]
+    source_ids = _cluster_source_delta_ids(rows)
+    representative_observation = _base_cluster_observation(representative.observation)
+    representative_summary = _base_cluster_summary(representative.change_summary)
     merged_observation = (
-        f"Clustered from {len(rows)} related proposals "
+        f"Clustered from {len(source_ids)} related proposals "
         f"({', '.join(source_ids)}). Representative observation: "
-        f"{representative.observation}"
+        f"{representative_observation}"
     )
-    merged_change = (
+    merged_summary = (
         f"Distilled representative change for "
         f"{representative.target_skill}:{representative.function_id}. "
-        f"{representative.proposed_change}"
+        f"{representative_summary}"
     )
     return representative.model_copy(
         update={
             "observation": merged_observation,
-            "proposed_change": merged_change,
+            "change_summary": merged_summary,
+            "patch": representative.patch,
             "evidence_refs": merged_evidence_refs,
             "applicable_surface": _ordered_union(row.applicable_surface for row in rows),
             "failure_types": _ordered_union(row.failure_types for row in rows),
@@ -650,6 +758,44 @@ def _distill_delta_cluster(rows: list[DeltaPortfolioRow]) -> DeltaPortfolioRow:
             "token_cost_delta_sum": sum(row.token_cost_delta_sum for row in rows),
         }
     )
+
+
+def _cluster_source_delta_ids(rows: list[DeltaPortfolioRow]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in rows:
+        parsed_ids = _cluster_ids_from_observation(row.observation)
+        for delta_id in parsed_ids or [row.delta_id]:
+            if not delta_id or delta_id in seen:
+                continue
+            seen.add(delta_id)
+            out.append(delta_id)
+    return out
+
+
+def _cluster_ids_from_observation(observation: str) -> list[str]:
+    match = _CLUSTER_OBSERVATION_RE.match(observation)
+    if not match:
+        return []
+    return [item.strip() for item in match.group("ids").split(",") if item.strip()]
+
+
+def _base_cluster_observation(observation: str) -> str:
+    current = observation
+    while True:
+        match = _CLUSTER_OBSERVATION_RE.match(current)
+        if not match:
+            return current
+        current = match.group("body")
+
+
+def _base_cluster_summary(summary: str) -> str:
+    current = summary
+    while True:
+        match = _CLUSTER_SUMMARY_RE.match(current)
+        if not match:
+            return current
+        current = match.group("body")
 
 
 def _ordered_union(groups: Iterable[Iterable[str]]) -> list[str]:
