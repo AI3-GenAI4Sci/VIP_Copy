@@ -1,30 +1,29 @@
 # Docs
 
-Flat durable documentation for the workspace. This directory intentionally has
-no subdirectories: old iteration material is distilled here, not revived as
-parallel live notes.
+Durable documentation for the current production chain.
 
-## Entry
+## Read Order
 
-- `.planning/STATE.md` is the live execution pointer.
-- `memory.md`: compact cross-iteration operating truth.
-- `rubrics.md`: compact standards for judging future changes.
+1. `README.md`
+2. `CONTEXT.md`
+3. `docs/vip-copy-workshop.md`
+4. `docs/system-walkthrough.md`
+5. `docs/design.md`
+6. `docs/memory.md`
+7. `docs/rubrics.md`
+8. `docs/methodology.md`
+9. `docs/deepseek_rate_limit_facts.md`
 
-## Use When Needed
+## Files
 
-- `design.md`: current architecture, code map, data contract, and provider facts.
-- `methodology.md`: SKILL-writing and agent-method distillation.
-- `history.md`: candidate evolution lineage, provenance, and regression watch.
-
-## Read Order For Fresh Agents
-
-1. `workspace/README.md`
-2. `.planning/PROJECT.md`
-3. `.planning/STATE.md`
-4. `docs/memory.md`
-5. `docs/rubrics.md`
-6. `.planning/ROADMAP.md`
-7. Current phase plan under `.planning/phases/`
-
-Use `.planning/` for execution state and phase plans. Use
-`harness-runtime/AGENTS.md` only for reviewed release promotion.
+- `vip-copy-workshop.md`: problem framing and design rationale for the
+  personalization and self-evolution capabilities.
+- `system-walkthrough.md`: end-to-end case study tracing one real request
+  through the production and self-evolution chains, with reproducible numbers.
+- `design.md`: architecture, production runner shape, provider facts, and
+  evidence layout.
+- `memory.md`: compact operating truth for future agents.
+- `methodology.md`: skill-writing rules for production and evolution skills.
+- `rubrics.md`: copy, factor, export, engineering, and evidence standards.
+- `deepseek_rate_limit_facts.md`: current DeepSeek runtime facts and pressure
+  controls.
