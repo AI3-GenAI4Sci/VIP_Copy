@@ -20,3 +20,8 @@ data_100k.csv
 
 # Local development tests are not synchronized to GitHub.
 tests/
+
+# Only the public case study is synced under docs/; all other docs stay local.
+docs/*
+!docs/system-walkthrough.md
+.understand-anything/
